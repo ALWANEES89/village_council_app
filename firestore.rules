@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── دوال مساعدة ──────────────────────────────
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isAuth() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isAuth() &&
+        get(/databases/$(database)/documents/members/$(request.auth.uid))
+          .data.get('isAdmin', false) == true;
+    }
+
+    // ── مجموعة الأعضاء ───────────────────────────
+    match /members/{memberId} {
+      // العضو يقرأ بياناته فقط، الأدمن يقرأ الكل
+      allow read: if isOwner(memberId) || isAdmin();
+
+      // الإنشاء: الأدمن فقط (أو عند التسجيل الأول)
+      allow create: if isAdmin();
+
+      // التعديل: العضو يعدّل fcmToken فقط، الأدمن يعدّل كل شيء
+      allow update: if isOwner(memberId) || isAdmin();
+
+      // الحذف: الأدمن فقط
+      allow delete: if isAdmin();
+    }
+
+    // ── مجموعة المدفوعات ─────────────────────────
+    match /payments/{paymentId} {
+      // العضو يقرأ مدفوعاته فقط
+      allow read: if isAuth() &&
+        (resource.data.memberId == request.auth.uid || isAdmin());
+
+      // الإنشاء: الأدمن فقط (يتم عند إضافة عضو جديد)
+      allow create: if isAdmin();
+
+      // التعديل: العضو يرفع الإيصال (status → pending)، الأدمن يغير كل شيء
+      allow update: if isAuth() &&
+        (resource.data.memberId == request.auth.uid || isAdmin());
+
+      allow delete: if isAdmin();
+    }
+
+    // ── مجموعة المعاملات ─────────────────────────
+    match /transactions/{transactionId} {
+      // العضو يقرأ معاملاته فقط
+      allow read: if isAuth() &&
+        (resource.data.memberId == request.auth.uid || isAdmin());
+
+      // الإنشاء: العضو ينشئ معاملة لنفسه عند رفع الإيصال
+      allow create: if isAuth() &&
+        request.resource.data.memberId == request.auth.uid;
+
+      // التعديل: الأدمن فقط (قبول / رفض)
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+    // ── قائمة انتظار الإشعارات ──────────────────
+    match /notifications_queue/{notifId} {
+      // لا أحد يقرأ من التطبيق — Cloud Functions تقرأ بـ Admin SDK
+      allow read: if false;
+
+      // الأدمن فقط يكتب عند الموافقة/الرفض
+      allow create: if isAdmin();
+
+      // Cloud Functions تحذف السجل بعد الإرسال — Admin SDK يتجاوز القواعد
+      allow update, delete: if false;
+    }
+  }
+}
