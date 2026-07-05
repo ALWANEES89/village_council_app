@@ -1,5 +1,5 @@
 name: village_council_app
-description: تطبيق إدارة مجلس القرية - الاشتراكات والرسوم المالية
+description: Village Council App
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -10,40 +10,28 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # Firebase
   firebase_core: ^2.27.0
   firebase_auth: ^4.17.0
   cloud_firestore: ^4.15.0
   firebase_storage: ^11.6.0
   firebase_messaging: ^14.7.19
-  flutter_local_notifications: ^16.3.2
-
-  # State Management
+  flutter_local_notifications: 19.5.0
   flutter_riverpod: ^2.5.1
   riverpod_annotation: ^2.3.5
-
-  # Navigation
   go_router: ^13.2.0
-
-  # File Upload
   file_picker: ^8.0.3
   image_picker: ^1.1.2
-
-  # UI
   cached_network_image: ^3.3.1
   shimmer: ^3.0.0
   lottie: ^3.1.0
   percent_indicator: ^4.2.3
   timeline_tile: ^2.0.0
   pinput: ^3.0.1
-
-  # Utils
   intl: ^0.19.0
   shared_preferences: ^2.2.3
   flutter_secure_storage: ^9.0.0
   uuid: ^4.4.0
   url_launcher: ^6.2.6
-
   cupertino_icons: ^1.0.6
 
 dev_dependencies:
@@ -55,15 +43,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/images/
-    - assets/animations/
-
-  fonts:
-    - family: Cairo
-      fonts:
-        - asset: assets/fonts/Cairo-Regular.ttf
-        - asset: assets/fonts/Cairo-Bold.ttf
-          weight: 700
-        - asset: assets/fonts/Cairo-SemiBold.ttf
-          weight: 600

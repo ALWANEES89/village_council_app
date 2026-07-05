@@ -2,7 +2,7 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    // ── إيصالات الدفع ────────────────────────────
+    // ── إيصالات الدفع (المسار القديم — إبقاء للتوافق) ────────────────────────────
     // المسار: receipts/{memberId}/{paymentId}/{fileName}
     match /receipts/{memberId}/{paymentId}/{fileName} {
 
@@ -22,13 +22,93 @@ service firebase.storage {
       // الحذف: الأدمن فقط
       allow delete: if isAdmin();
     }
-  }
 
-  // دالة مساعدة للتحقق من صلاحية الأدمن من Firestore
-  function isAdmin() {
-    return request.auth != null &&
-      firestore.get(
-        /databases/(default)/documents/members/$(request.auth.uid)
-      ).data.get('isAdmin', false) == true;
+    // ── صورة الملف الشخصي ────────────────────────────
+    // المسار: users/{userId}/profile/{fileName}
+    match /users/{userId}/profile/{fileName} {
+      // أي مستخدم مسجّل يستطيع القراءة (الصورة تظهر داخل التطبيق).
+      allow read: if request.auth != null;
+
+      // الرفع: صاحب الحساب فقط، صور فقط، حد أقصى 5 ميجابايت.
+      allow write: if request.auth != null &&
+        request.auth.uid == userId &&
+        request.resource.size <= 5 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/.*');
+    }
+
+    // ── إيصالات الدفع داخل المجلس (المسار المعتمد) ────────────────────────────
+    // المسار: organizations/{orgId}/members/{userId}/receipts/{receiptId}/{fileName}
+    match /organizations/{organizationId}/members/{userId}/receipts/{receiptId}/{fileName} {
+
+      // القراءة: صاحب الإيصال، أو المراجع المالي/الأدمن/المشرف العام.
+      //
+      // TODO(security): تقييد القراءة عبر firestore.get داخل Storage Rules
+      // يكلّف قراءة Firestore لكل وصول وقد يكون هشًّا. يجب لاحقًا نقل قراءة
+      // الإيصالات إلى Cloud Function أو Signed URL أو Custom Claims لضمان أن
+      // المراجعين الماليين فقط يقرأونها بشكل موثوق وأرخص.
+      allow read: if request.auth != null &&
+        (request.auth.uid == userId || isFinanceReviewer(organizationId));
+
+      // الرفع: صاحب الحساب فقط، صور أو PDF، حد أقصى 10 ميجابايت.
+      allow create, update: if request.auth != null &&
+        request.auth.uid == userId &&
+        request.resource.size <= 10 * 1024 * 1024 &&
+        (request.resource.contentType.matches('image/.*') ||
+         request.resource.contentType == 'application/pdf');
+
+      // لا حذف مباشر من العميل (soft-review فقط).
+      allow delete: if false;
+    }
+
+    // ── دوال مساعدة ─────────────────────────────────────────────────────────
+    // مهم: في Storage Rules يجب تعريف الدوال **داخل** كتلة match؛ تعريفها على
+    // مستوى service (خارج match /b/{bucket}/o) يُفشل تصريف الملف بالكامل فيُرفض
+    // النشر وتبقى القواعد المنشورة قديمة (سبب firebase_storage/unauthorized رغم
+    // صحّة المسار). firestore.get() على مستند غير موجود يُفشل التقييم، لذا نتحقق
+    // دائمًا عبر firestore.exists() أولاً.
+    function isAdmin() {
+      return request.auth != null &&
+        firestore.exists(
+          /databases/(default)/documents/members/$(request.auth.uid)
+        ) &&
+        firestore.get(
+          /databases/(default)/documents/members/$(request.auth.uid)
+        ).data.get('isAdmin', false) == true;
+    }
+
+    function isSuperAdmin() {
+      return request.auth != null &&
+        firestore.exists(
+          /databases/(default)/documents/platform_admins/$(request.auth.uid)
+        ) &&
+        firestore.get(
+          /databases/(default)/documents/platform_admins/$(request.auth.uid)
+        ).data.get('role', '') == 'superAdmin' &&
+        firestore.get(
+          /databases/(default)/documents/platform_admins/$(request.auth.uid)
+        ).data.get('status', '') == 'active' &&
+        firestore.get(
+          /databases/(default)/documents/platform_admins/$(request.auth.uid)
+        ).data.get('fullAccess', false) == true;
+    }
+
+    function isFinanceReviewer(organizationId) {
+      return request.auth != null &&
+        (isAdmin() || isSuperAdmin() || hasFinanceMembership(organizationId));
+    }
+
+    function hasFinanceMembership(organizationId) {
+      return firestore.exists(
+          /databases/(default)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid)
+        ) &&
+        (
+          firestore.get(
+            /databases/(default)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid)
+          ).data.get('roleId', '') in ['chairman', 'financialManager', 'financialReviewer'] ||
+          firestore.get(
+            /databases/(default)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid)
+          ).data.get('permissionsSnapshot', []).hasAny(['fullAccess', 'receipts.review'])
+        );
+    }
   }
 }

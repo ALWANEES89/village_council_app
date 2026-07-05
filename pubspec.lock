@@ -482,26 +482,34 @@ packages:
     dependency: "direct main"
     description:
       name: flutter_local_notifications
-      sha256: "55b9b229307a10974b26296ff29f2e132256ba4bd74266939118eaefa941cb00"
+      sha256: "19ffb0a8bb7407875555e5e98d7343a633bb73707bae6c6a5f37c90014077875"
       url: "https://pub.dev"
     source: hosted
-    version: "16.3.3"
+    version: "19.5.0"
   flutter_local_notifications_linux:
     dependency: transitive
     description:
       name: flutter_local_notifications_linux
-      sha256: c49bd06165cad9beeb79090b18cd1eb0296f4bf4b23b84426e37dd7c027fc3af
+      sha256: e3c277b2daab8e36ac5a6820536668d07e83851aeeb79c446e525a70710770a5
       url: "https://pub.dev"
     source: hosted
-    version: "4.0.1"
+    version: "6.0.0"
   flutter_local_notifications_platform_interface:
     dependency: transitive
     description:
       name: flutter_local_notifications_platform_interface
-      sha256: "85f8d07fe708c1bdcf45037f2c0109753b26ae077e9d9e899d55971711a4ea66"
+      sha256: "277d25d960c15674ce78ca97f57d0bae2ee401c844b6ac80fcd972a9c99d09fe"
       url: "https://pub.dev"
     source: hosted
-    version: "7.2.0"
+    version: "9.1.0"
+  flutter_local_notifications_windows:
+    dependency: transitive
+    description:
+      name: flutter_local_notifications_windows
+      sha256: "8d658f0d367c48bd420e7cf2d26655e2d1130147bca1eea917e576ca76668aaf"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.3"
   flutter_plugin_android_lifecycle:
     dependency: transitive
     description:
@@ -804,10 +812,10 @@ packages:
     dependency: "direct main"
     description:
       name: lottie
-      sha256: "8b6359a7422167014aa73ce763fa133fb832065dcc0ac4d1dec1f603a5cef7d0"
+      sha256: "9f050d75e94e783537454b4f14a10f690fc24e83dab6520ef5a4bb185b6d6da3"
       url: "https://pub.dev"
     source: hosted
-    version: "3.3.3"
+    version: "3.4.0"
   matcher:
     dependency: transitive
     description:
@@ -900,10 +908,10 @@ packages:
     dependency: transitive
     description:
       name: path_provider_linux
-      sha256: f7a1fe3a634fe7734c8d3f2766ad746ae2a2884abe22e241a8b301bf5cac3279
+      sha256: "58c2005f147315b11e9b4a7bc889cd5203e250cba8e3f012dae259b4972b5c16"
       url: "https://pub.dev"
     source: hosted
-    version: "2.2.1"
+    version: "2.2.2"
   path_provider_platform_interface:
     dependency: transitive
     description:
@@ -1177,10 +1185,10 @@ packages:
     dependency: transitive
     description:
       name: sqflite_darwin
-      sha256: "164a5d73ab87a134566057219988bafde837029a64264e61f1f04376ef3cfcd2"
+      sha256: c86ca18b8f666bbf903924687fe21cc16fc385d086005067e26619ca530bef9f
       url: "https://pub.dev"
     source: hosted
-    version: "2.4.3"
+    version: "2.4.3+1"
   sqflite_platform_interface:
     dependency: transitive
     description:
@@ -1265,10 +1273,10 @@ packages:
     dependency: transitive
     description:
       name: timezone
-      sha256: "2236ec079a174ce07434e89fcd3fcda430025eb7692244139a9cf54fdcf1fc7d"
+      sha256: dd14a3b83cfd7cb19e7888f1cbc20f258b8d71b54c06f79ac585f14093a287d1
       url: "https://pub.dev"
     source: hosted
-    version: "0.9.4"
+    version: "0.10.1"
   timing:
     dependency: transitive
     description:

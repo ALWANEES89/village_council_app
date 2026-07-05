@@ -11,10 +11,222 @@ service cloud.firestore {
       return isAuth() && request.auth.uid == uid;
     }
 
-    function isAdmin() {
+    // مالك المنصّة الأعلى (System Owner) أو المشرف العام. يُنشأ فقط من
+    // Console/Admin SDK (لا من الواجهة). role=system_owner يمنح كل صلاحيات
+    // المنصّة (Global Override) على كل المجالس بغضّ النظر عن دوره داخل المجلس.
+    function isSystemOwner() {
+      let adminPath = /databases/$(database)/documents/platform_admins/$(request.auth.uid);
       return isAuth() &&
-        get(/databases/$(database)/documents/members/$(request.auth.uid))
-          .data.get('isAdmin', false) == true;
+        exists(adminPath) &&
+        get(adminPath).data.get('status', '') == 'active' &&
+        (get(adminPath).data.get('role', '') == 'system_owner' ||
+         (get(adminPath).data.get('role', '') == 'superAdmin' &&
+          get(adminPath).data.get('fullAccess', false) == true));
+    }
+
+    // مرادف مستخدم في القواعد القائمة (إنشاء المؤسسات، قراءة السجل، ...).
+    function isSuperAdmin() {
+      return isSystemOwner();
+    }
+
+    // مالك داخل المجلس: عضوية نشطة بدور مالك، أو صلاحية fullAccess.
+    function isOrgOwner(organizationId) {
+      let membershipPath = /databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid);
+      return isAuth() && exists(membershipPath) &&
+        get(membershipPath).data.get('status', '') == 'active' &&
+        (get(membershipPath).data.get('roleId', '') in
+           ['system_owner', 'owner', 'council_owner'] ||
+         get(membershipPath).data.get('role', '') in
+           ['system_owner', 'owner', 'council_owner'] ||
+         get(membershipPath).data.get('permissionsSnapshot', [])
+           .hasAny(['fullAccess']));
+    }
+
+    // هل مستند العضوية الهدف هو المالك الأساسي (محمي من التعديل/الحذف)؟
+    function membershipIsPrimaryOwner(data) {
+      return data.get('isPrimaryOwner', false) == true ||
+        data.get('roleId', '') == 'system_owner' ||
+        data.get('role', '') == 'system_owner' ||
+        data.get('role', '') == 'owner';
+    }
+
+    function isAdmin() {
+      return isSuperAdmin() ||
+        (isAuth() &&
+         exists(/databases/$(database)/documents/members/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/members/$(request.auth.uid))
+           .data.get('isAdmin', false) == true);
+    }
+
+    function canManageRoles(organizationId) {
+      let membershipPath = /databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid);
+      return isSuperAdmin() ||
+        (isAuth() &&
+         exists(membershipPath) &&
+         get(membershipPath).data.get('status', '') == 'active' &&
+         get(membershipPath).data.get('permissionsSnapshot', []).hasAny([
+           'fullAccess',
+           'roles.manage'
+         ]));
+    }
+
+    function canReviewMembershipRequests(organizationId) {
+      let membershipPath = /databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid);
+      return isAdmin() ||
+        (isAuth() &&
+         exists(membershipPath) &&
+         get(membershipPath).data.get('status', '') == 'active' &&
+         get(membershipPath).data.get('permissionsSnapshot', []).hasAny([
+           'fullAccess',
+           'membershipRequests.review',
+           'membership_requests.review',
+           'memberships.review',
+           'members.approve',
+           'members.manage'
+         ]));
+    }
+
+    function canManageMembers(organizationId) {
+      let membershipPath = /databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid);
+      return isAdmin() ||
+        (isAuth() &&
+         exists(membershipPath) &&
+         get(membershipPath).data.get('status', '') == 'active' &&
+         get(membershipPath).data.get('permissionsSnapshot', []).hasAny([
+           'fullAccess',
+           'members.manage'
+         ]));
+    }
+
+    function canReadMembers(organizationId) {
+      let membershipPath = /databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid);
+      return canManageMembers(organizationId) ||
+        (isAuth() && exists(membershipPath) &&
+         get(membershipPath).data.get('status', '') == 'active' &&
+         get(membershipPath).data.get('permissionsSnapshot', []).hasAny([
+           'members.read'
+         ]));
+    }
+
+    function canReviewReceipts(organizationId) {
+      let membershipPath = /databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid);
+      return isSuperAdmin() ||
+        (isAuth() && exists(membershipPath) &&
+         get(membershipPath).data.get('status', '') == 'active' &&
+         (get(membershipPath).data.get('roleId', '') in [
+            'chairman', 'financialManager', 'financialReviewer'
+          ] ||
+          get(membershipPath).data.get('permissionsSnapshot', []).hasAny([
+            'fullAccess', 'receipts.review', 'payments.approve',
+            'payments.reject'
+          ])));
+    }
+
+    function canReviewBookings(organizationId) {
+      let membershipPath = /databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid);
+      return isSuperAdmin() ||
+        (isAuth() && exists(membershipPath) &&
+         get(membershipPath).data.get('status', '') == 'active' &&
+         (get(membershipPath).data.get('roleId', '') in [
+            'chairman', 'adminManager'
+          ] ||
+          get(membershipPath).data.get('permissionsSnapshot', []).hasAny([
+            'fullAccess', 'bookings.manage', 'bookings.approve'
+          ])));
+    }
+
+    function isOrganizationMember(organizationId) {
+      let membershipPath = /databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid);
+      return isAuth() && exists(membershipPath) &&
+        get(membershipPath).data.get('status', '') == 'active';
+    }
+
+    // ── حماية تصعيد الصلاحيات ─────────────────────
+    // إسناد الأدوار وكتابة permissionsSnapshot عملية حسّاسة: يُسمح بها فقط
+    // لمن يملك roles.manage / fullAccess (أو المشرف العام أو الأدمن القديم).
+    // من يملك members.manage فقط (مثل المدير الإداري) يدير الأعضاء لكنه لا
+    // يستطيع تغيير الدور أو الصلاحيات.
+    function canAssignRoles(organizationId) {
+      return isAdmin() || canManageRoles(organizationId) ||
+        isOrgOwner(organizationId);
+    }
+
+    // عند تحديث العضوية بصلاحية members.manage فقط: يجب ألا تتغيّر حقول
+    // الدور/الصلاحيات/الهوية.
+    function membershipPrivilegeFieldsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys()
+        .hasAny(['roleId', 'permissionsSnapshot', 'userId', 'organizationId']);
+    }
+
+    // قائمة الصلاحيات الإدارية/المالية الحسّاسة التي لا يجوز أن تُكتب عبر
+    // مسار اعتماد طلبات العضوية (دور member فقط) لمنع منح صلاحيات مرتفعة.
+    function hasNoPrivilegedPermissions(perms) {
+      return !perms.hasAny([
+        'fullAccess',
+        'roles.manage',
+        'members.manage',
+        'members.approve',
+        'organization.manage',
+        'settings.manage',
+        'receipts.review',
+        'payments.approve',
+        'payments.reject',
+        'payments.manage',
+        'transactions.review',
+        'bookings.approve',
+        'bookings.manage',
+        'membershipRequests.review',
+        'membership_requests.review',
+        'memberships.review',
+        'announcements.manage',
+        'notifications.send',
+        'audit.read'
+      ]);
+    }
+
+    function hasNoProtectedUserFields(data) {
+      return !data.keys().hasAny([
+        'roles',
+        'permissions',
+        'isAdmin',
+        'isSuperAdmin',
+        'platformRole',
+        'memberships',
+        'status',
+        'password',
+        'passwordHash'
+      ]);
+    }
+
+    function hasNoPasswordFields(data) {
+      return !data.keys().hasAny(['password', 'passwordHash']);
+    }
+
+    function changesNoProtectedUserFields() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'userId',
+        'roles',
+        'permissions',
+        'isAdmin',
+        'isSuperAdmin',
+        'platformRole',
+        'memberships',
+        'status',
+        'password',
+        'passwordHash'
+      ]);
+    }
+
+    function isProductionOrganizationBootstrap(organizationId) {
+      let organizationPath = /databases/$(database)/documents/organizations/$(organizationId);
+      return isAuth() &&
+        organizationId == 'rahmat_general_council' &&
+        !exists(organizationPath) &&
+        getAfter(organizationPath).data.organizationId == organizationId &&
+        getAfter(organizationPath).data.officialNameArabic == 'مجلس سيح الرحمات العام' &&
+        getAfter(organizationPath).data.status == 'active' &&
+        getAfter(organizationPath).data.profilePublished == true &&
+        getAfter(organizationPath).data.schemaVersion == 1;
     }
 
     // ── مجموعة الأعضاء ───────────────────────────
@@ -23,10 +235,15 @@ service cloud.firestore {
       allow read: if isOwner(memberId) || isAdmin();
 
       // الإنشاء: الأدمن فقط (أو عند التسجيل الأول)
-      allow create: if isAdmin();
+      allow create: if isAdmin() &&
+        hasNoPasswordFields(request.resource.data);
 
       // التعديل: العضو يعدّل fcmToken فقط، الأدمن يعدّل كل شيء
-      allow update: if isOwner(memberId) || isAdmin();
+      allow update: if hasNoPasswordFields(request.resource.data) &&
+        (isAdmin() ||
+         (isOwner(memberId) &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['fcmToken', 'photoUrl'])));
 
       // الحذف: الأدمن فقط
       allow delete: if isAdmin();
@@ -36,14 +253,20 @@ service cloud.firestore {
     match /payments/{paymentId} {
       // العضو يقرأ مدفوعاته فقط
       allow read: if isAuth() &&
-        (resource.data.memberId == request.auth.uid || isAdmin());
+        (resource.data.memberId == request.auth.uid || isAdmin() ||
+         canReviewReceipts(resource.data.organizationId));
 
       // الإنشاء: الأدمن فقط (يتم عند إضافة عضو جديد)
       allow create: if isAdmin();
 
       // التعديل: العضو يرفع الإيصال (status → pending)، الأدمن يغير كل شيء
       allow update: if isAuth() &&
-        (resource.data.memberId == request.auth.uid || isAdmin());
+        (isAdmin() || canReviewReceipts(resource.data.organizationId) ||
+         (resource.data.memberId == request.auth.uid &&
+          request.resource.data.status == 'pending' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'receiptUrl', 'transactionId'
+          ])));
 
       allow delete: if isAdmin();
     }
@@ -52,16 +275,31 @@ service cloud.firestore {
     match /transactions/{transactionId} {
       // العضو يقرأ معاملاته فقط
       allow read: if isAuth() &&
-        (resource.data.memberId == request.auth.uid || isAdmin());
+        (resource.data.memberId == request.auth.uid || isAdmin() ||
+         canReviewReceipts(resource.data.organizationId));
 
       // الإنشاء: العضو ينشئ معاملة لنفسه عند رفع الإيصال
       allow create: if isAuth() &&
-        request.resource.data.memberId == request.auth.uid;
+        request.resource.data.memberId == request.auth.uid &&
+        request.resource.data.status == 'pendingReview' &&
+        request.resource.data.reviewStatus == 'pending' &&
+        request.resource.data.uploadedByUserId == request.auth.uid;
 
       // التعديل: الأدمن فقط (قبول / رفض)
-      allow update: if isAdmin();
+      allow update: if isAdmin() ||
+        canReviewReceipts(resource.data.organizationId);
 
       allow delete: if isAdmin();
+    }
+
+    // ── قراءة معاملات العضو عبر كل المجالس (Collection Group) ─────
+    // يسمح باستعلام collectionGroup('transactions') لسجل معاملات/إيصالات
+    // العضو نفسه (memberTransactionsStream: where userId == uid)، ولمالك
+    // المنصّة الأعلى. قراءة فقط، ومقيّدة بمُلكية المستند (userId == uid) — لا
+    // تسريب بين المستخدمين، ولا تمنح أي كتابة (الكتابة تبقى بقواعد المسار).
+    match /{path=**}/transactions/{transactionId} {
+      allow read: if isSystemOwner() ||
+        (isAuth() && resource.data.userId == request.auth.uid);
     }
 
     // ── قائمة انتظار الإشعارات ──────────────────
@@ -74,6 +312,288 @@ service cloud.firestore {
 
       // Cloud Functions تحذف السجل بعد الإرسال — Admin SDK يتجاوز القواعد
       allow update, delete: if false;
+    }
+
+    match /member_history/{historyId} {
+      allow read: if isAuth() &&
+        (resource.data.userId == request.auth.uid ||
+         isAdmin() ||
+         canReadMembers(resource.data.organizationId));
+      // سلامة السجل: الفاعل المسجَّل يجب أن يكون المستخدم الحالي (منع الانتحال).
+      // المالك الأعلى (system_owner) يكتب سجل أي مجلس (Global Override).
+      allow create: if request.resource.data.actorUserId == request.auth.uid &&
+        (isSystemOwner() ||
+         isAdmin() ||
+         canManageMembers(request.resource.data.organizationId) ||
+         canManageRoles(request.resource.data.organizationId) ||
+         canReviewMembershipRequests(request.resource.data.organizationId));
+      allow update, delete: if isAdmin();
+    }
+
+    // V2 person accounts. Legacy members remain unchanged during migration.
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) &&
+        request.resource.data.userId == userId &&
+        hasNoProtectedUserFields(request.resource.data);
+      allow update: if hasNoPasswordFields(request.resource.data) &&
+        (isSuperAdmin() ||
+         (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'activeOrganizationId',
+            'primaryOrganizationId',
+            'updatedAt'
+          ]) &&
+          canReviewMembershipRequests(
+            request.resource.data.activeOrganizationId
+          )) ||
+         ((isAdmin() || isOwner(userId)) &&
+          changesNoProtectedUserFields()));
+      allow delete: if isAdmin();
+
+      // TODO(security): نقل توليد الإشعارات (fan-out) لاحقًا إلى Cloud Functions
+      // بـ Admin SDK وإغلاق create من العميل، لمنع إغراق مستخدمين بإشعارات.
+      match /notifications/{notificationId} {
+        allow read: if isOwner(userId);
+        allow update: if isOwner(userId) &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'readAt']);
+        allow create: if request.resource.data.notificationId == notificationId &&
+          request.resource.data.userId == userId &&
+          request.resource.data.status == 'unread' &&
+          'organizationId' in request.resource.data &&
+          (isSuperAdmin() ||
+           (isAuth() &&
+            request.resource.data.createdByUserId == request.auth.uid &&
+            exists(/databases/$(database)/documents/organizations/$(request.resource.data.organizationId))));
+        allow delete: if false;
+      }
+    }
+
+    // Multi-organization architecture.
+    match /platform_admins/{userId} {
+      // المستخدم يقرأ مستنده فقط؛ لا list؛ لا إنشاء/حذف من العميل.
+      // (أول تعيين لمالك النظام يتم من Console/Admin SDK حصريًّا.)
+      allow get: if isOwner(userId);
+      allow list: if false;
+      allow create, delete: if false;
+      // التحديث الوحيد المسموح: تفضيلات إشعارات المستخدم لنفسه (لا يمس الدور/الحالة).
+      allow update: if isOwner(userId) && isSuperAdmin() &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['notificationPreferences', 'updatedAt']);
+    }
+
+    match /organizations/{organizationId} {
+      allow read: if isAuth();
+      allow create: if isSuperAdmin() ||
+        isProductionOrganizationBootstrap(organizationId);
+      allow update, delete: if isSuperAdmin();
+
+      match /roles/{roleId} {
+        allow read: if isAuth();
+        allow create: if canManageRoles(organizationId) ||
+          (isProductionOrganizationBootstrap(organizationId) &&
+           roleId in [
+             'chairman',
+             'adminManager',
+             'financialManager',
+             'financialReviewer',
+             'secretary',
+             'member'
+           ] &&
+           request.resource.data.roleId == roleId &&
+           request.resource.data.systemRole == true);
+        allow update, delete: if canManageRoles(organizationId);
+      }
+
+      match /financial_profile/{profileId} {
+        allow read: if isAuth();
+        allow create: if canManageRoles(organizationId) ||
+          (isProductionOrganizationBootstrap(organizationId) &&
+           profileId == 'banking' &&
+           request.resource.data.enabled == false);
+        allow update, delete: if canManageRoles(organizationId);
+      }
+
+      match /settings/{settingId} {
+        allow read: if isAuth();
+        allow create: if canManageRoles(organizationId) ||
+          (isProductionOrganizationBootstrap(organizationId) &&
+           settingId in ['organization', 'location_maps']);
+        allow update, delete: if canManageRoles(organizationId);
+      }
+
+      match /counters/{counterId} {
+        allow read, create, update: if
+          canReviewMembershipRequests(organizationId);
+        allow delete: if false;
+      }
+
+      match /audit_logs/{auditId} {
+        allow read: if isSystemOwner() || canManageRoles(organizationId) ||
+          canReviewReceipts(organizationId) ||
+          canReviewMembershipRequests(organizationId);
+        // سجل خادمي فقط (append-only): يُكتب حصريًّا بواسطة Cloud Functions عبر
+        // Admin SDK (يتجاوز القواعد). العميل ممنوع من الإنشاء/التعديل/الحذف،
+        // مما يمنع التلاعب أو انتحال الفاعل أو حذف الأثر.
+        allow create, update, delete: if false;
+      }
+
+      match /memberships/{membershipId} {
+        // القوائم مقيّدة: المستخدم يستعلم عن عضوياته فقط (userId == uid)، أو
+        // يكون مخوّلاً بقراءة أعضاء نفس المجلس. هذا يمنع تعداد عضويات مجالس
+        // أخرى عبر استعلام collection-group غير مُقيّد (عزل بين المجالس).
+        // المالك الأعلى (system_owner) يقرأ عضويات كل المجالس (Global Override).
+        allow list: if isSystemOwner() ||
+          (isAuth() &&
+           (resource.data.userId == request.auth.uid ||
+            canReadMembers(organizationId) ||
+            isOrganizationMember(organizationId)));
+        allow read: if isSystemOwner() ||
+          (isAuth() &&
+           (membershipId == request.auth.uid ||
+            resource.data.userId == request.auth.uid ||
+            canReadMembers(organizationId) ||
+            isOrganizationMember(organizationId)));
+        // الإنشاء: المالك الأعلى، أو من يملك roles.manage/fullAccess/الأدمن ينشئ
+        // بأي دور. اعتماد طلب العضوية (مراجع الطلبات) يقتصر على دور member بدون
+        // أي صلاحيات مرتفعة، ويشترط تحوّل الطلب من pending إلى approved.
+        allow create: if isSystemOwner() ||
+          canAssignRoles(organizationId) ||
+          (canReviewMembershipRequests(organizationId) &&
+           membershipId == request.resource.data.userId &&
+           request.resource.data.organizationId == organizationId &&
+           request.resource.data.status == 'active' &&
+           request.resource.data.approvedBy == request.auth.uid &&
+           request.resource.data.roleId == 'member' &&
+           hasNoPrivilegedPermissions(request.resource.data.permissionsSnapshot) &&
+           exists(/databases/$(database)/documents/organizations/$(organizationId)/membership_requests/$(membershipId)) &&
+           get(/databases/$(database)/documents/organizations/$(organizationId)/membership_requests/$(membershipId)).data.status == 'pending' &&
+           getAfter(/databases/$(database)/documents/organizations/$(organizationId)/membership_requests/$(membershipId)).data.status == 'approved');
+        // التحديث: تغيير الدور/الصلاحيات يتطلب roles.manage/fullAccess/مالك.
+        // من يملك members.manage فقط يعدّل الحالة/البيانات دون لمس الدور أو
+        // permissionsSnapshot (منع تصعيد الصلاحيات لنفسه أو لغيره).
+        // التحديث: المالك الأعلى (system_owner) يعدّل أي عضوية في أي مجلس.
+        // حماية المالك الأساسي: عضوية المالك لا يعدّلها إلا system_owner —
+        // لا رئيس مجلس ولا مدير إداري (حتى لو عدّلوا حقولاً غير الدور).
+        allow update: if isSystemOwner() ||
+          (!membershipIsPrimaryOwner(resource.data) &&
+           (canManageRoles(organizationId) ||
+            canAssignRoles(organizationId) ||
+            (canManageMembers(organizationId) &&
+             membershipPrivilegeFieldsUnchanged()) ||
+            (canReviewMembershipRequests(organizationId) &&
+             membershipId == request.resource.data.userId &&
+             request.resource.data.organizationId == organizationId &&
+             request.resource.data.status == 'active' &&
+             request.resource.data.approvedBy == request.auth.uid &&
+             request.resource.data.roleId == 'member' &&
+             hasNoPrivilegedPermissions(request.resource.data.permissionsSnapshot) &&
+             exists(/databases/$(database)/documents/organizations/$(organizationId)/membership_requests/$(membershipId)) &&
+             get(/databases/$(database)/documents/organizations/$(organizationId)/membership_requests/$(membershipId)).data.status == 'pending' &&
+             getAfter(/databases/$(database)/documents/organizations/$(organizationId)/membership_requests/$(membershipId)).data.status == 'approved')));
+        // الحذف: المالك الأعلى (system_owner) فقط، أو مدير أعضاء لعضو غير المالك.
+        allow delete: if isSystemOwner() ||
+          (!membershipIsPrimaryOwner(resource.data) &&
+           canManageMembers(organizationId));
+      }
+
+      match /membership_requests/{requestId} {
+        allow read: if isAuth() &&
+          (requestId == request.auth.uid ||
+           resource.data.userId == request.auth.uid ||
+           canReviewMembershipRequests(organizationId));
+
+        allow create: if isAuth() &&
+          requestId == request.auth.uid &&
+          request.resource.data.requestId == requestId &&
+          request.resource.data.userId == request.auth.uid &&
+          request.resource.data.organizationId == organizationId &&
+          request.resource.data.requestedRole == 'member' &&
+          request.resource.data.status == 'pending';
+
+        allow update: if isAdmin() ||
+          (canManageMembers(organizationId) &&
+           resource.data.status == 'approved' &&
+           request.resource.data.status == 'cancelled' &&
+           request.resource.data.cancelledBy == request.auth.uid) ||
+          (canReviewMembershipRequests(organizationId) &&
+           resource.data.status == 'pending' &&
+           request.resource.data.status in ['approved', 'rejected'] &&
+           request.resource.data.reviewedBy == request.auth.uid &&
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+             'status',
+             'reviewedAt',
+             'reviewedBy',
+             'rejectionReason',
+             'notes'
+           ])) ||
+          (isAuth() &&
+           resource.data.userId == request.auth.uid &&
+           request.resource.data.userId == resource.data.userId &&
+           request.resource.data.requestId == requestId &&
+           request.resource.data.organizationId == organizationId &&
+           ((request.resource.data.status == 'cancelled' &&
+             request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['status'])) ||
+            (resource.data.status in ['approved', 'rejected', 'cancelled'] &&
+             request.resource.data.requestedRole == 'member' &&
+             request.resource.data.status == 'pending' &&
+             (!exists(/databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid)) ||
+              get(/databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid)).data.status != 'active'))));
+
+        allow delete: if isAdmin();
+      }
+
+      match /transactions/{transactionId} {
+        // get (مستند مفرد): المالك الأعلى، أو صاحب المعاملة، أو مراجع الإيصالات.
+        allow get: if isSystemOwner() ||
+          (isAuth() &&
+           (resource.data.userId == request.auth.uid ||
+            canReviewReceipts(organizationId)));
+        // list (استعلام): لا يشير إلى resource.data حتى لا يُرفض الاستعلام غير
+        // المقيّد (شاشة مراجعة الإيصالات) — تحليل الاستعلام أصرم من فحص المستند
+        // المفرد، ووجود resource.data.userId في قاعدة list كان يرفض الاستعلام
+        // حتى للمالك الأعلى. المراجع/المالك فقط يستعلمان قائمة إيصالات المجلس.
+        allow list: if isSystemOwner() || canReviewReceipts(organizationId);
+        allow create: if isAuth() &&
+          request.resource.data.transactionId == transactionId &&
+          request.resource.data.organizationId == organizationId &&
+          request.resource.data.userId == request.auth.uid &&
+          request.resource.data.uploadedByUserId == request.auth.uid &&
+          request.resource.data.status == 'pendingReview' &&
+          request.resource.data.reviewStatus == 'pending';
+        allow update: if isSystemOwner() || canReviewReceipts(organizationId);
+        allow delete: if false;
+      }
+
+      match /bookings/{bookingId} {
+        allow read: if isAuth();
+        allow create: if isAuth() &&
+          request.resource.data.bookingId == bookingId &&
+          request.resource.data.organizationId == organizationId &&
+          request.resource.data.userId == request.auth.uid &&
+          request.resource.data.status == 'pending' &&
+          ((exists(/databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.resource.data.membershipId)) &&
+            get(/databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.resource.data.membershipId)).data.status == 'active' &&
+            (request.resource.data.membershipId == request.auth.uid ||
+             get(/databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.resource.data.membershipId)).data.userId == request.auth.uid)) ||
+           (exists(/databases/$(database)/documents/organizations/$(organizationId)/settings/organization) &&
+            get(/databases/$(database)/documents/organizations/$(organizationId)/settings/organization).data.get('allowHallRental', false) == true));
+        allow update: if canReviewBookings(organizationId) &&
+          resource.data.status == 'pending' &&
+          ((request.resource.data.status == 'approved' &&
+            request.resource.data.approvedBy == request.auth.uid) ||
+           (request.resource.data.status == 'rejected' &&
+            request.resource.data.rejectedBy == request.auth.uid));
+        allow delete: if false;
+      }
+
+      // Bootstrap markers and future organization modules are platform-owned.
+      match /{module}/{documentId} {
+        allow read: if isAuth();
+        allow create, update: if isSuperAdmin();
+        allow delete: if false;
+      }
     }
   }
 }

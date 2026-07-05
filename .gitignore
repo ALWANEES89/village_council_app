@@ -43,3 +43,25 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+local_keys/
+
+# Node.js (functions, firebase-deploy, root scripts)
+node_modules/
+**/node_modules/
+functions/lib/
+firebase-deploy/serviceAccountKey*.json
+*.serviceAccount.json
+**/serviceAccount*.json
+npm-debug.log*
+
+# Local Firebase caches
+.firebase/
+firebase-debug.log*
+firestore-debug.log*
+dataconnect-generated/
+
+# ملفات بيانات حسّاسة (أرقام حسابات) — لا تُرفع
+*.xlsx
+*.xls
+*.xlsm
+*.csv

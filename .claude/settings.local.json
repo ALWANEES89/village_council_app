@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(flutter analyze 2>&1)",
+      "Bash(find . -name \"AndroidManifest.xml\" -not -path \"*/build/*\")",
+      "Bash(grep -rn \"POST_NOTIFICATIONS\\\\|INTERNET\\\\|default_notification_channel\\\\|firebase\" android/app/src/main/AndroidManifest.xml)",
+      "Bash(node --check functions/index.js)",
+      "Bash(flutter analyze *)",
+      "Bash(timeout 60 firebase deploy --only firestore:rules --dry-run)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(node --check audit.js)",
+      "Bash(node --check index.js)"
+    ]
+  }
+}

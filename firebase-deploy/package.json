@@ -1,0 +1,8 @@
+{
+  "name": "firebase-deploy",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "dependencies": {
+    "google-auth-library": "^9.0.0"
+  }
+}
