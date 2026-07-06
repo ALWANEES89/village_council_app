@@ -46,6 +46,17 @@ exports.onNotificationCreated = onDocumentCreated(
       return;
     }
 
+    // تفضيلات المستخدم للصوت/الاهتزاز → اختيار القناة المطابقة (يجب أن تطابق
+    // kNotificationChannels في التطبيق) حتى يحترم Push الخلفي اختيار المستخدم.
+    const ns = userSnap.exists ? userSnap.get("notificationSettings") || {} : {};
+    const soundOn = ns.soundEnabled !== false;
+    const vibeOn = ns.vibrationEnabled !== false;
+    const channelId =
+      soundOn && vibeOn ? "vc_high_sv"
+        : soundOn && !vibeOn ? "vc_high_s"
+        : !soundOn && vibeOn ? "vc_silent_v"
+        : "vc_silent";
+
     const tokenList = [...tokens];
     const message = {
       tokens: tokenList,
@@ -60,13 +71,16 @@ exports.onNotificationCreated = onDocumentCreated(
         organizationId: String(notification.organizationId || ""),
       },
       android: {
+        priority: "high",
         notification: {
-          channelId: "village_council_high",
+          channelId,
           priority: "high",
-          sound: "default",
+          ...(soundOn ? { sound: "default" } : {}),
         },
       },
-      apns: { payload: { aps: { sound: "default", badge: 1 } } },
+      apns: {
+        payload: { aps: { ...(soundOn ? { sound: "default" } : {}), badge: 1 } },
+      },
     };
 
     try {

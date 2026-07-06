@@ -182,7 +182,6 @@ class MembershipRequestRepository {
 
       final membershipReference =
           organizationReference.collection('memberships').doc(request.userId);
-      final userReference = _firestore.collection('users').doc(request.userId);
       final roleSnapshot = await transaction.get(roleReference);
       final roleData = roleSnapshot.data() ??
           OrganizationSeedService.instance.defaultRoles[assignedRoleId]!;
@@ -193,10 +192,9 @@ class MembershipRequestRepository {
       final existingMembership = await transaction.get(membershipReference);
       final existingMembershipData = existingMembership.data();
 
-      final userSnapshot = await transaction.get(userReference);
-      if (!userSnapshot.exists) {
-        throw StateError('The applicant user profile does not exist.');
-      }
+      // لا نقرأ مستند المتقدّم users/{userId}: قاعدة قراءة users تسمح لصاحب
+      // المستند أو الأدمن فقط، فقراءته هنا كانت تُفشل معاملة القبول كاملةً
+      // (permission-denied) لأي مراجِع ليس أدمن عامًّا (رئيس/مدير مجلس).
       final counterSnapshot = await transaction.get(counterReference);
       final storedCounter =
           counterSnapshot.data()?['lastMemberNumber'] as int? ?? 0;
@@ -207,12 +205,6 @@ class MembershipRequestRepository {
       final resolvedMemberNumber = existingMemberNumber.isNotEmpty
           ? existingMemberNumber
           : nextMemberNumber.toString().padLeft(3, '0');
-      final hasPrimaryMembership =
-          (userSnapshot.data()?['primaryOrganizationId'] as String?)
-                  ?.trim()
-                  .isNotEmpty ==
-              true;
-
       final now = FieldValue.serverTimestamp();
       transaction.set(
           membershipReference,
@@ -225,12 +217,15 @@ class MembershipRequestRepository {
             'joinedAt': existingMembershipData?['joinedAt'] ?? now,
             'approvedBy': reviewedBy,
             'approvedAt': now,
-            'isPrimary': existingMembershipData?['isPrimary'] == true ||
-                !hasPrimaryMembership,
+            'isPrimary': existingMembershipData?['isPrimary'] == true,
             'permissionsSnapshot': permissions.toSet().toList(),
             'joinedReason': 'membershipRequest',
             'invitedBy': null,
+            // إعادة القبول تبدأ عضوية نظيفة: نمسح كل حقول الطرد/المغادرة السابقة
+            // (merge:true لا يحذفها تلقائيًّا) حتى لا تبقى بيانات طرد قديمة عالقة.
             'leftReason': null,
+            'removedAt': null,
+            'removedBy': null,
             'fullName': request.fullName,
             'civilId': request.civilId,
             'phone': request.phone,
@@ -246,11 +241,9 @@ class MembershipRequestRepository {
         'reviewedBy': reviewedBy,
         'rejectionReason': null,
       });
-      transaction.update(userReference, {
-        'activeOrganizationId': organizationId,
-        if (!hasPrimaryMembership) 'primaryOrganizationId': organizationId,
-        'updatedAt': now,
-      });
+      // لا نكتب مؤشّرات activeOrganizationId/primaryOrganizationId على مستند
+      // المتقدّم: لا يقرؤها أي كود في التطبيق (حقول غير مستخدمة)، وكتابتها من
+      // مراجِع غير مالك للمستند غير ضرورية. اعتماد العضوية يبقى ذرّيًّا وكاملًا.
       if (existingMemberNumber.isEmpty) {
         transaction.set(counterReference, {
           'lastMemberNumber': nextMemberNumber,

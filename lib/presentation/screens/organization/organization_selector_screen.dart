@@ -494,7 +494,7 @@ class _OrganizationCardState extends ConsumerState<_OrganizationCard> {
           languageCode: 'en',
           fallback: '',
         );
-        final roleName = roleLabelArabic(
+        final roleName = effectiveRoleLabelArabic(
           widget.membership.roleId,
           role: widget.membership.role,
           fallback: _localizedValue(
@@ -502,6 +502,7 @@ class _OrganizationCardState extends ConsumerState<_OrganizationCard> {
             languageCode: 'ar',
             fallback: widget.membership.roleId,
           ),
+          permissions: widget.membership.permissionsSnapshot,
         );
         final logo = organization['logo'] ?? organization['logoUrl'];
 

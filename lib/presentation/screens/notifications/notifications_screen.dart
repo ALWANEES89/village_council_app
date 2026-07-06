@@ -2,13 +2,12 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/notifications/notification_deeplink.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/app_notification_model.dart';
 import '../../../providers/app_providers.dart';
-import '../member/council_booking_screen.dart';
 
 class NotificationsScreen extends ConsumerWidget {
   const NotificationsScreen({super.key});
@@ -90,32 +89,23 @@ class NotificationsScreen extends ConsumerWidget {
       }
     }
     if (!context.mounted) return;
-    switch (notification.relatedEntityType) {
-      case 'booking':
-        if (notification.organizationId != null) {
-          context.pushNamed(
-            'rentalPlaceholder',
-            extra: CouncilBookingArguments(
-              organizationId: notification.organizationId,
-            ),
-          );
-        }
-        return;
-      case 'receipt':
-        context.pushNamed('receiptHistory');
-        return;
-      case 'membership':
-      case 'membershipRequest':
-        context.goNamed('memberHome');
-        return;
-      default:
-        break;
-    }
+
+    // التوجيه الموحّد (نفسه المستخدَم عند النقر على Push الخارجي).
+    await NotificationDeepLink.open(
+      context,
+      ref,
+      type: notification.type,
+      relatedEntityType: notification.relatedEntityType,
+      relatedEntityId: notification.relatedEntityId,
+      organizationId: notification.organizationId,
+    );
   }
 
-  static void _showError(BuildContext context) {
+  static void _showError(BuildContext context, {String? message}) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('تعذر تحديث الإشعار. حاول مرة أخرى.')),
+      SnackBar(
+        content: Text(message ?? 'تعذر تحديث الإشعار. حاول مرة أخرى.'),
+      ),
     );
   }
 }

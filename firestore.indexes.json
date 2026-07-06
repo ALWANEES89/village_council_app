@@ -67,6 +67,14 @@
       ]
     },
     {
+      "collectionGroup": "transactions",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "userId",      "order": "ASCENDING" },
+        { "fieldPath": "submittedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "membership_requests",
       "queryScope": "COLLECTION",
       "fields": [

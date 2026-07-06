@@ -352,10 +352,11 @@ class _MemberDetailsScreenState extends ConsumerState<MemberDetailsScreen> {
                   title: 'معلومات العضوية',
                   rows: {
                     'رقم العضو': value.membership.memberNumber,
-                    'الدور': roleLabelArabic(
+                    'الدور': effectiveRoleLabelArabic(
                       value.membership.roleId,
                       role: value.membership.role,
                       fallback: value.roleName,
+                      permissions: value.membership.permissionsSnapshot,
                     ),
                     'الحالة': _statusLabel(value.membership.status),
                     'تاريخ الانضمام': DateFormat('yyyy/MM/dd')

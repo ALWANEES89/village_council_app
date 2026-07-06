@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'core/theme/app_theme.dart';
+import 'core/notifications/notification_tap_listener.dart';
 import 'router/app_router.dart';
 import 'data/services/organization_seed_service.dart';
 import 'data/services/notification_service.dart';
@@ -35,7 +36,7 @@ class VillageCouncilApp extends ConsumerWidget {
       builder: (context, child) {
         return Directionality(
           textDirection: ui.TextDirection.rtl,
-          child: child!,
+          child: NotificationTapListener(child: child!),
         );
       },
     );

@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- الاتصال بالخادم، وإشعارات أندرويد 13+، والاهتزاز مع الإشعارات. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
     <application
         android:label="village_council_app"
         android:name="${applicationName}"
@@ -33,6 +37,12 @@
                     android:host="join" />
             </intent-filter>
         </activity>
+        <!-- القناة الافتراضية لإشعارات FCM عندما يُنشئ النظامُ الإشعار في
+             الخلفية/الإغلاق دون تحديد قناة صريحة. تطابق قناة NotificationService. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="vc_high_sv" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

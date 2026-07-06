@@ -416,16 +416,19 @@ class _HeaderAndProfile extends StatelessWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 46,
-                  height: 46,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Icon(
-                    Icons.account_balance,
-                    color: Colors.white,
+                GestureDetector(
+                  onTap: () => context.pushNamed('notificationSettings'),
+                  child: Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Icon(
+                      Icons.account_balance,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -767,10 +770,11 @@ class _MembershipCardState extends ConsumerState<_MembershipCard> {
       future: _meta,
       builder: (context, snapshot) {
         final name = _organizationName(snapshot.data?.organization);
-        final role = roleLabelArabic(
+        final role = effectiveRoleLabelArabic(
           liveMembership.roleId,
           role: liveMembership.role,
           fallback: _roleName(snapshot.data?.role, liveMembership.roleId),
+          permissions: liveMembership.permissionsSnapshot,
         );
         return GestureDetector(
           onTap: widget.onEnter,

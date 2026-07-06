@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -6,9 +7,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../core/notifications/notification_settings.dart';
+
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await NotificationService.instance.showLocalNotification(message);
+  // في الخلفية/الإغلاق يَعرض النظامُ إشعارَ FCM تلقائيًّا (الحمولة تحوي
+  // notification) باستخدام القناة المحددة من Cloud Function/manifest — فلا
+  // نعرض نسخةً ثانية هنا منعًا للتكرار. النقر يُعالَج عبر
+  // onMessageOpenedApp (خلفية) و getInitialMessage (إغلاق).
 }
 
 class NotificationService {
@@ -20,39 +26,46 @@ class NotificationService {
   StreamSubscription<User?>? _authSubscription;
   StreamSubscription<String>? _tokenRefreshSubscription;
 
-  final _androidChannel = const AndroidNotificationChannel(
-    'village_council_high',
-    'إشعارات مجلس القرية',
-    description: 'إشعارات اعتماد الدفعات ومتابعة الطلبات',
-    importance: Importance.high,
-  );
+  final _tapController = StreamController<Map<String, String>>.broadcast();
+  Map<String, String>? _pendingInitialTap;
+
+  /// يبثّ حمولة (data) الإشعار عند النقر عليه — Push في الخلفية أو إشعار محلي
+  /// في المقدّمة — ليُوجّه الجذرُ المستخدمَ إلى الشاشة الصحيحة.
+  Stream<Map<String, String>> get onNotificationTap => _tapController.stream;
 
   Future<void> init() async {
     await _fcm.requestPermission(alert: true, badge: true, sound: true);
-
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-    await _localNotifications
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(_androidChannel);
+    final androidPlugin =
+        _localNotifications.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+    // صلاحية الإشعارات على أندرويد 13+.
+    await androidPlugin?.requestNotificationsPermission();
+    // أنشئ كل القنوات مرّة واحدة؛ نختار منها حسب تفضيل المستخدم عند العرض.
+    for (final channel in kNotificationChannels) {
+      await androidPlugin?.createNotificationChannel(channel);
+    }
 
     await _localNotifications.initialize(
       const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
         iOS: DarwinInitializationSettings(),
       ),
+      onDidReceiveNotificationResponse: _onLocalNotificationTap,
     );
 
+    // المقدّمة: FCM لا يعرض تلقائيًّا، فنعرض إشعارًا محليًّا بقناة المستخدم.
     FirebaseMessaging.onMessage.listen(showLocalNotification);
+    // نقر إشعار Push والتطبيق في الخلفية.
+    FirebaseMessaging.onMessageOpenedApp.listen((m) => _emitTap(m.data));
+    // فتح التطبيق من الإغلاق عبر النقر على إشعار: نخزّنه ليستهلكه الجذر.
+    final initial = await _fcm.getInitialMessage();
+    if (initial != null) _pendingInitialTap = _stringify(initial.data);
 
-    // Keep the signed-in user's FCM token synced so the Cloud Function can
-    // deliver a device push for every notification created for that user.
     _authSubscription ??= FirebaseAuth.instance.authStateChanges().listen(
       (user) {
-        if (user != null) {
-          unawaited(registerTokenForUser(user.uid));
-        }
+        if (user != null) unawaited(registerTokenForUser(user.uid));
       },
     );
     final currentUser = FirebaseAuth.instance.currentUser;
@@ -61,10 +74,30 @@ class NotificationService {
     }
   }
 
+  /// يُرجع (ويستهلك مرّة واحدة) الإشعار الذي فُتح به التطبيق من حالة الإغلاق.
+  Map<String, String>? consumePendingTap() {
+    final pending = _pendingInitialTap;
+    _pendingInitialTap = null;
+    return pending;
+  }
+
+  void _emitTap(Map<String, dynamic> data) => _tapController.add(_stringify(data));
+
+  Map<String, String> _stringify(Map<String, dynamic> data) =>
+      data.map((key, value) => MapEntry(key, '${value ?? ''}'));
+
+  void _onLocalNotificationTap(NotificationResponse response) {
+    final payload = response.payload;
+    if (payload == null || payload.isEmpty) return;
+    try {
+      _emitTap(jsonDecode(payload) as Map<String, dynamic>);
+    } catch (_) {}
+  }
+
   Future<String?> getToken() async => await _fcm.getToken();
 
-  /// Fetches the device FCM token and stores it on `users/{userId}`, and keeps
-  /// it updated on refresh. Best-effort: failures never surface to the user.
+  /// يجلب توكن الجهاز ويحفظه على `users/{uid}`، ويحدّثه عند التغيّر.
+  /// أفضل جهد: لا تظهر الأخطاء للمستخدم.
   Future<void> registerTokenForUser(String userId) async {
     try {
       final token = await _fcm.getToken();
@@ -93,9 +126,7 @@ class NotificationService {
     } on FirebaseException catch (error) {
       debugPrint('[Push] users token persist skipped code=${error.code}');
     }
-    // Fallback for legacy accounts that only have a members/{uid} document
-    // (no users/{uid} doc, or its update failed). The Cloud Function also
-    // reads members.fcmToken, so the push still reaches these users.
+    // توافق خلفي للحسابات التي تملك members/{uid} فقط.
     try {
       await firestore.collection('members').doc(userId).update({
         'fcmToken': token,
@@ -105,27 +136,56 @@ class NotificationService {
     }
   }
 
+  /// حذف توكن هذا الجهاز عند تسجيل الخروج حتى لا تصل إشعارات المستخدم السابق.
+  Future<void> deleteTokenForUser(String userId) async {
+    try {
+      final token = await _fcm.getToken();
+      if (token != null && token.isNotEmpty) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userId)
+            .update({
+          'fcmTokens': FieldValue.arrayRemove([token]),
+        });
+      }
+      await _fcm.deleteToken();
+    } catch (error) {
+      debugPrint('[Push] token deletion skipped: $error');
+    }
+  }
+
   Future<void> showLocalNotification(RemoteMessage message) async {
     final notification = message.notification;
     if (notification == null) return;
-
+    final settings = await NotificationSettingsStore.loadLocal();
+    final channelId = settings.channelId;
     await _localNotifications.show(
       notification.hashCode,
       notification.title,
       notification.body,
       NotificationDetails(
         android: AndroidNotificationDetails(
-          _androidChannel.id,
-          _androidChannel.name,
-          channelDescription: _androidChannel.description,
-          importance: Importance.high,
+          channelId,
+          _channelName(channelId),
+          channelDescription: 'إشعارات المجلس',
+          importance: settings.soundEnabled || settings.vibrationEnabled
+              ? Importance.high
+              : Importance.low,
           priority: Priority.high,
+          playSound: settings.soundEnabled,
+          enableVibration: settings.vibrationEnabled,
         ),
-        iOS: const DarwinNotificationDetails(),
+        iOS: DarwinNotificationDetails(presentSound: settings.soundEnabled),
       ),
+      payload: jsonEncode(message.data),
     );
   }
 
+  String _channelName(String id) => kNotificationChannels
+      .firstWhere((c) => c.id == id, orElse: () => kNotificationChannels.first)
+      .name;
+
+  /// توافق خلفي: مسار الطابور القديم (لم يعد يُستخدم بعد onNotificationCreated).
   Future<void> sendNotificationToMember({
     required String fcmToken,
     required String title,

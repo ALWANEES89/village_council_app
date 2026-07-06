@@ -17,6 +17,10 @@ class ReceiptHistoryScreen extends ConsumerWidget {
     final user = ref.watch(authStateProvider).value;
     final receipts =
         user == null ? null : ref.watch(memberTransactionsProvider(user.uid));
+    // إيصالات المجلس الحالي فقط — لا تُدمج إيصالات المجالس الأخرى للعضو.
+    final currentOrgId = ref
+        .watch(organizationContextProvider)
+        .currentOrganization?['organizationId'] as String?;
     return Directionality(
       textDirection: ui.TextDirection.rtl,
       child: Scaffold(
@@ -44,14 +48,31 @@ class ReceiptHistoryScreen extends ConsumerWidget {
                     ],
                   ),
                 ),
-                data: (items) => items.isEmpty
-                    ? const Center(child: Text('لا توجد إيصالات'))
-                    : ListView.builder(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: items.length,
-                        itemBuilder: (_, index) =>
-                            _ReceiptHistoryCard(receipt: items[index]),
-                      ),
+                data: (items) {
+                  if (currentOrgId == null) {
+                    return const Center(
+                      child: Text('افتح المجلس لعرض إيصالاته'),
+                    );
+                  }
+                  // تصفية على المجلس الحالي + إزالة التكرار (قد يُطابق
+                  // collectionGroup نسخة المجلس والنسخة الجذرية بنفس المعرّف).
+                  final seen = <String>{};
+                  final scoped = <TransactionModel>[];
+                  for (final receipt in items) {
+                    if (receipt.organizationId != currentOrgId) continue;
+                    if (seen.add(receipt.id)) scoped.add(receipt);
+                  }
+                  return scoped.isEmpty
+                      ? const Center(
+                          child: Text('لا توجد إيصالات في هذا المجلس'),
+                        )
+                      : ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: scoped.length,
+                          itemBuilder: (_, index) =>
+                              _ReceiptHistoryCard(receipt: scoped[index]),
+                        );
+                },
               ),
       ),
     );

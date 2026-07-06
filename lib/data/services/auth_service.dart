@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/member_model.dart';
+import 'notification_service.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -158,6 +159,12 @@ class AuthService {
   }
 
   Future<void> signOut() async {
+    // احذف توكن هذا الجهاز أولًا (والمستخدم ما زال مصادَقًا) حتى لا تصل إشعاراته
+    // للمستخدم التالي على نفس الجهاز. أفضل جهد: لا يعطّل تسجيل الخروج.
+    final uid = _auth.currentUser?.uid;
+    if (uid != null) {
+      await NotificationService.instance.deleteTokenForUser(uid);
+    }
     await _auth.signOut();
   }
 }

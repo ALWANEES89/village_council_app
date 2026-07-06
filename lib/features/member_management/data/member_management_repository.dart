@@ -124,12 +124,6 @@ class MemberManagementRepository {
         .collection('roles')
         .doc(newRoleId);
     final historyReference = _history.doc();
-    final notificationId = 'membershipRoleChanged_$userId';
-    final notificationReference = _firestore
-        .collection('users')
-        .doc(userId)
-        .collection('notifications')
-        .doc(notificationId);
     var changed = false;
 
     await _firestore.runTransaction((transaction) async {
@@ -163,22 +157,22 @@ class MemberManagementRepository {
         'reason': null,
         'createdAt': FieldValue.serverTimestamp(),
       });
-      transaction.set(notificationReference, {
-        'notificationId': notificationId,
-        'userId': userId,
-        'organizationId': organizationId,
-        'title': 'تم تحديث دورك في المجلس',
-        'body': 'تم تغيير دورك وصلاحياتك في المجلس.',
-        'type': 'membershipRoleChanged',
-        'relatedEntityType': 'membership',
-        'relatedEntityId': userId,
-        'status': 'unread',
-        'createdAt': FieldValue.serverTimestamp(),
-        'readAt': null,
-        'createdByUserId': actorUserId,
-      });
     });
     if (!changed) return;
+    // الإشعار يُرسَل خارج المعاملة وبأسلوب best-effort. معرّفه ثابت
+    // (membershipRoleChanged_{userId})، فعند تكرار تغيير الدور تتحوّل الكتابة إلى
+    // update، وقاعدة تحديث الإشعار تسمح لصاحبه فقط (status/readAt). لو بقي داخل
+    // المعاملة لأفشلها كاملةً بـ permission-denied — حتى للمالك الأعلى. عزله يضمن
+    // نجاح تغيير الدور، وتجاهُل فشل الإشعار.
+    await _notifySafely(
+      userId: userId,
+      organizationId: organizationId,
+      title: 'تم تحديث دورك في المجلس',
+      body: 'تم تغيير دورك وصلاحياتك في المجلس.',
+      type: 'membershipRoleChanged',
+      relatedEntityId: userId,
+      actorUserId: actorUserId,
+    );
   }
 
   bool _isPrimaryOwner(Map<String, dynamic>? data) {

@@ -147,16 +147,15 @@ class FirestoreService {
   }
 
   Stream<List<TransactionModel>> memberTransactionsStream(String memberId) {
+    // orderBy('submittedAt') يطابق فهرس collection-group المبنيّ
+    // (transactions: userId ASC + submittedAt DESC)، فبدونه كان الاستعلام يفشل
+    // على الخادم بعد الكاش وتختفي الإيصالات (FAILED_PRECONDITION).
     return _db
         .collectionGroup('transactions')
         .where('userId', isEqualTo: memberId)
+        .orderBy('submittedAt', descending: true)
         .snapshots()
-        .map((snap) {
-      final items = snap.docs.map(TransactionModel.fromFirestore).toList();
-      items
-          .sort((left, right) => right.submittedAt.compareTo(left.submittedAt));
-      return items;
-    });
+        .map((snap) => snap.docs.map(TransactionModel.fromFirestore).toList());
   }
 
   Stream<List<TransactionModel>> pendingTransactionsStream() {

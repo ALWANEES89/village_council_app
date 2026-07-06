@@ -268,7 +268,12 @@ class _MemberResults extends StatelessWidget {
             ),
             subtitle: Text(
               '${member.membership.memberNumber} • '
-              '${roleLabelArabic(member.membership.roleId, role: member.membership.role, fallback: member.roleName)}',
+              '${effectiveRoleLabelArabic(
+                member.membership.roleId,
+                role: member.membership.role,
+                fallback: member.roleName,
+                permissions: member.membership.permissionsSnapshot,
+              )}',
             ),
             trailing: _StatusBadge(status: member.membership.status),
             onTap: () => context.pushNamed(

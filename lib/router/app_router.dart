@@ -23,6 +23,7 @@ import '../features/membership_request/presentation/join_request_screen.dart';
 import '../presentation/screens/admin/membership_requests_review_screen.dart';
 import '../presentation/screens/admin/booking_requests_review_screen.dart';
 import '../presentation/screens/notifications/notifications_screen.dart';
+import '../presentation/screens/notifications/notification_settings_screen.dart';
 import '../features/member_management/presentation/member_list_screen.dart';
 import '../features/member_management/presentation/member_details_screen.dart';
 import '../features/member_management/presentation/member_permissions_screen.dart';
@@ -136,6 +137,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/notifications',
         name: 'notifications',
         builder: (_, __) => const NotificationsScreen(),
+      ),
+      GoRoute(
+        path: '/notifications/settings',
+        name: 'notificationSettings',
+        builder: (_, __) => const NotificationSettingsScreen(),
       ),
       GoRoute(
         path: '/profile/edit',
