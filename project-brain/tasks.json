@@ -1,0 +1,26 @@
+﻿[
+  {
+    "id": "TASK-001",
+    "title": "إنشاء هيكل عقل المشروع",
+    "area": "إدارة المشروع",
+    "status": "done",
+    "progress": 100,
+    "priority": "high"
+  },
+  {
+    "id": "TASK-002",
+    "title": "ربط عقل المشروع مع OneDrive",
+    "area": "النسخ الاحتياطي",
+    "status": "done",
+    "progress": 100,
+    "priority": "high"
+  },
+  {
+    "id": "TASK-003",
+    "title": "تحديث خارطة طريق المشروع",
+    "area": "التخطيط",
+    "status": "in_progress",
+    "progress": 40,
+    "priority": "medium"
+  }
+]

@@ -1,0 +1,12 @@
+{
+  "project": "village_council_app",
+  "version": "1.0",
+  "last_updated": "2026-07-11",
+  "source_of_truth": "project-brain/data/tasks.csv",
+  "allowed_statuses": [
+    "Planned",
+    "In Progress",
+    "Done",
+    "Blocked"
+  ]
+}
