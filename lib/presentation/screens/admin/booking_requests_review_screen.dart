@@ -77,6 +77,38 @@ class _BookingRequestsReviewScreenState
     }
   }
 
+  Future<void> _reviewCancellation(BookingModel booking, bool approve) async {
+    final reason = await showReasonDialog(
+      context: context,
+      title: approve ? 'اعتماد إلغاء الحجز' : 'رفض إلغاء الحجز',
+      hint: approve ? 'ملاحظة اختيارية' : 'سبب الرفض',
+      actionLabel: approve ? 'اعتماد الإلغاء' : 'رفض الطلب',
+      confirmColor: approve ? Colors.red : Colors.orange,
+      required: !approve,
+    );
+    if (!mounted || reason == null) return;
+    setState(() => _processingId = booking.bookingId);
+    try {
+      await ref.read(bookingRepositoryProvider).reviewCancellation(
+            organizationId: booking.organizationId,
+            bookingId: booking.bookingId,
+            approve: approve,
+            reason: reason,
+          );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content:
+              Text(approve ? 'تم اعتماد إلغاء الحجز.' : 'تم رفض طلب الإلغاء.'),
+        ));
+      }
+    } catch (error) {
+      debugPrint('[BookingReview] cancellation failed: $error');
+      if (mounted) _showError();
+    } finally {
+      if (mounted) setState(() => _processingId = null);
+    }
+  }
+
   void _showError() {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('تعذر تحديث طلب الحجز. حاول مرة أخرى.')),
@@ -122,7 +154,9 @@ class _BookingRequestsReviewScreenState
                     ),
                     data: (items) {
                       final pending = items
-                          .where((booking) => booking.status == 'pending')
+                          .where((booking) =>
+                              booking.status == 'pending' ||
+                              booking.status == 'cancellationRequested')
                           .toList();
                       if (pending.isEmpty) {
                         return const Center(
@@ -154,7 +188,9 @@ class _BookingRequestsReviewScreenState
                                   Text(
                                       'التاريخ: ${DateFormat('yyyy/MM/dd').format(booking.bookingDate)}'),
                                   Text('المناسبة: ${booking.occasionType}'),
-                                  const Text('الحالة: قيد المراجعة'),
+                                  Text(booking.status == 'cancellationRequested'
+                                      ? 'الحالة: طلب إلغاء بانتظار القرار'
+                                      : 'الحالة: قيد المراجعة'),
                                   if (booking.startTime != null ||
                                       booking.endTime != null)
                                     Text(
@@ -168,9 +204,19 @@ class _BookingRequestsReviewScreenState
                                         child: FilledButton.icon(
                                           onPressed: processing
                                               ? null
-                                              : () => _approve(booking),
-                                          icon: const Icon(Icons.check),
-                                          label: const Text('اعتماد'),
+                                              : () => booking.status ==
+                                                      'cancellationRequested'
+                                                  ? _reviewCancellation(
+                                                      booking, true)
+                                                  : _approve(booking),
+                                          icon: Icon(booking.status ==
+                                                  'cancellationRequested'
+                                              ? Icons.cancel
+                                              : Icons.check),
+                                          label: Text(booking.status ==
+                                                  'cancellationRequested'
+                                              ? 'اعتماد الإلغاء'
+                                              : 'اعتماد'),
                                         ),
                                       ),
                                       const SizedBox(width: 10),
@@ -178,9 +224,16 @@ class _BookingRequestsReviewScreenState
                                         child: OutlinedButton.icon(
                                           onPressed: processing
                                               ? null
-                                              : () => _reject(booking),
+                                              : () => booking.status ==
+                                                      'cancellationRequested'
+                                                  ? _reviewCancellation(
+                                                      booking, false)
+                                                  : _reject(booking),
                                           icon: const Icon(Icons.close),
-                                          label: const Text('رفض'),
+                                          label: Text(booking.status ==
+                                                  'cancellationRequested'
+                                              ? 'رفض الإلغاء'
+                                              : 'رفض'),
                                         ),
                                       ),
                                     ],

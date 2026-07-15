@@ -40,24 +40,26 @@ service firebase.storage {
     // المسار: organizations/{orgId}/members/{userId}/receipts/{receiptId}/{fileName}
     match /organizations/{organizationId}/members/{userId}/receipts/{receiptId}/{fileName} {
 
-      // القراءة: صاحب الإيصال، أو المراجع المالي/الأدمن/المشرف العام.
-      //
-      // TODO(security): تقييد القراءة عبر firestore.get داخل Storage Rules
-      // يكلّف قراءة Firestore لكل وصول وقد يكون هشًّا. يجب لاحقًا نقل قراءة
-      // الإيصالات إلى Cloud Function أو Signed URL أو Custom Claims لضمان أن
-      // المراجعين الماليين فقط يقرأونها بشكل موثوق وأرخص.
+      // القراءة المباشرة: صاحب الإيصال فقط. المراجع المالي يحصل على رابط قصير
+      // العمر من getFinancialReceiptDownloadUrl بعد تحقق خادمي من العضوية عبر
+      // userId؛ وبذلك لا نفترض أن membershipId يساوي Firebase Auth uid.
       allow read: if request.auth != null &&
-        (request.auth.uid == userId || isFinanceReviewer(organizationId));
+        request.auth.uid == userId;
 
       // الرفع: صاحب الحساب فقط، صور أو PDF، حد أقصى 10 ميجابايت.
-      allow create, update: if request.auth != null &&
+      allow create: if request.auth != null &&
         request.auth.uid == userId &&
+        request.resource.metadata.temporaryUpload == 'true' &&
+        request.resource.metadata.receiptId == receiptId &&
+        request.resource.metadata.uploaderUid == userId &&
+        request.resource.metadata.organizationId == organizationId &&
+        request.resource.metadata.uploadedAt is string &&
         request.resource.size <= 10 * 1024 * 1024 &&
         (request.resource.contentType.matches('image/.*') ||
          request.resource.contentType == 'application/pdf');
 
       // لا حذف مباشر من العميل (soft-review فقط).
-      allow delete: if false;
+      allow update, delete: if false;
     }
 
     // ── دوال مساعدة ─────────────────────────────────────────────────────────
@@ -92,23 +94,5 @@ service firebase.storage {
         ).data.get('fullAccess', false) == true;
     }
 
-    function isFinanceReviewer(organizationId) {
-      return request.auth != null &&
-        (isAdmin() || isSuperAdmin() || hasFinanceMembership(organizationId));
-    }
-
-    function hasFinanceMembership(organizationId) {
-      return firestore.exists(
-          /databases/(default)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid)
-        ) &&
-        (
-          firestore.get(
-            /databases/(default)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid)
-          ).data.get('roleId', '') in ['chairman', 'financialManager', 'financialReviewer'] ||
-          firestore.get(
-            /databases/(default)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid)
-          ).data.get('permissionsSnapshot', []).hasAny(['fullAccess', 'receipts.review'])
-        );
-    }
   }
 }

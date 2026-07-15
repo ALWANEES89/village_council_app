@@ -6,298 +6,252 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../data/models/financial_models.dart';
 import '../../../data/models/transaction_model.dart';
 import '../../../providers/app_providers.dart';
 import '../../widgets/reason_input_dialog.dart';
 
 class FinancialReviewScreen extends ConsumerStatefulWidget {
   const FinancialReviewScreen({super.key});
-
   @override
   ConsumerState<FinancialReviewScreen> createState() =>
       _FinancialReviewScreenState();
 }
 
 class _FinancialReviewScreenState extends ConsumerState<FinancialReviewScreen> {
-  /// معرّفات الإيصالات قيد المعالجة (اعتماد/رفض). حالة لكل إيصال على حدة —
-  /// لا loading عام — حتى لا يتعطّل غير الإيصال المستهدف، ولمنع الضغط المتكرر
-  /// أو فتح الإيصال أثناء رفضه/اعتماده (سبب crash `_dependents.isEmpty`).
-  final Set<String> _processingIds = {};
-
-  bool _isProcessing(String id) => _processingIds.contains(id);
+  final Set<String> _processing = {};
 
   Future<void> _approve(TransactionModel receipt) async {
-    final id = receipt.id;
-    final organizationId = receipt.organizationId;
-    if (_processingIds.contains(id) || organizationId == null) return;
-    final user = ref.read(authServiceProvider).currentUser;
-    if (user == null) return;
-    setState(() => _processingIds.add(id));
+    if (!receipt.amountsMatch || _processing.contains(receipt.id)) return;
+    setState(() => _processing.add(receipt.id));
     try {
       await ref.read(financialReceiptRepositoryProvider).approve(
-            transactionId: id,
-            organizationId: organizationId,
-            reviewedBy: user.uid,
+            transactionId: receipt.id,
+            organizationId: receipt.organizationId,
+            reviewedBy: ref.read(authServiceProvider).currentUser!.uid,
           );
-      if (!mounted) return;
-      // لا نستدعي ref.invalidate: تدفّق Firestore (snapshots) يُحدّث القائمة
-      // تلقائيًّا فيخرج الإيصال من pending. الإبطال هنا كان يعيد كامل القائمة
-      // إلى حالة loading فيهدم الشجرة أثناء أي تفاعل جارٍ (سبب crash).
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم اعتماد الإيصال بنجاح')),
-      );
-    } catch (error, stackTrace) {
-      debugPrint('[FinancialReview] approve failed id=$id: $error\n$stackTrace');
-      _showError();
+      _message('تم اعتماد الإيصال وتوزيع المبلغ على الرسوم.');
+    } catch (error) {
+      _message('تعذر الاعتماد. قد يكون رصيد أحد الرسوم قد تغير: $error',
+          error: true);
     } finally {
-      if (mounted) setState(() => _processingIds.remove(id));
+      if (mounted) setState(() => _processing.remove(receipt.id));
     }
   }
 
   Future<void> _reject(TransactionModel receipt) async {
-    final id = receipt.id;
-    final organizationId = receipt.organizationId;
-    if (_processingIds.contains(id) || organizationId == null) return;
-
+    if (_processing.contains(receipt.id)) return;
     final reason = await showReasonDialog(
       context: context,
       title: 'سبب رفض الإيصال',
-      hint: 'اكتب سبب الرفض',
-      actionLabel: 'رفض',
+      hint: 'اكتب سببًا واضحًا وإلزاميًا',
+      actionLabel: 'رفض الإيصال',
       confirmColor: Colors.red,
     );
-    if (!mounted || reason == null) return;
-    // تحقّق مجددًا بعد await الحوار (قد يكون الإيصال دخل المعالجة أثناءه).
-    if (_processingIds.contains(id)) return;
-    final user = ref.read(authServiceProvider).currentUser;
-    if (user == null) return;
-    setState(() => _processingIds.add(id));
+    if (!mounted || reason == null || reason.trim().isEmpty) return;
+    setState(() => _processing.add(receipt.id));
     try {
       await ref.read(financialReceiptRepositoryProvider).reject(
-            transactionId: id,
-            organizationId: organizationId,
-            reviewedBy: user.uid,
+            transactionId: receipt.id,
+            organizationId: receipt.organizationId,
+            reviewedBy: ref.read(authServiceProvider).currentUser!.uid,
             rejectionReason: reason,
           );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم رفض الإيصال')),
-      );
-    } catch (error, stackTrace) {
-      debugPrint('[FinancialReview] reject failed id=$id: $error\n$stackTrace');
-      _showError();
+      _message('تم رفض الإيصال دون خصم أي مبلغ.');
+    } catch (error) {
+      _message('تعذر رفض الإيصال: $error', error: true);
     } finally {
-      if (mounted) setState(() => _processingIds.remove(id));
+      if (mounted) setState(() => _processing.remove(receipt.id));
     }
   }
 
-  /// فتح الإيصال (رابط خارجي) بأمان: يستخدم context الخاص بالـ State مع فحص
-  /// mounted بعد await — لا يعتمد على context البطاقة التي قد تُحذف من القائمة.
   Future<void> _openReceipt(TransactionModel receipt) async {
-    // لا نفتح الإيصال إذا كان قيد الرفض/الاعتماد (منع سباق التفكيك).
-    if (_processingIds.contains(receipt.id)) return;
     try {
-      final uri = Uri.tryParse(receipt.receiptUrl);
-      final opened = uri != null &&
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
-      if (!opened && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تعذر فتح الإيصال')),
-        );
+      final url = await ref
+          .read(financialRepositoryProvider)
+          .getFinancialReceiptDownloadUrl(
+            organizationId: receipt.organizationId,
+            transactionId: receipt.id,
+          );
+      final uri = Uri.tryParse(url);
+      if (uri == null ||
+          !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        throw StateError('تعذر فتح رابط الإيصال.');
       }
-    } catch (error, stackTrace) {
-      debugPrint('[FinancialReview] open receipt failed '
-          'id=${receipt.id}: $error\n$stackTrace');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تعذر فتح الإيصال')),
-      );
+    } catch (error) {
+      _message('تعذر فتح الإيصال: $error', error: true);
     }
   }
 
-  void _showError() {
+  void _message(String message, {bool error = false}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('تعذر تنفيذ العملية. حاول مرة أخرى.'),
-        backgroundColor: Colors.red,
-      ),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(message),
+        backgroundColor: error ? Colors.red : Colors.green));
   }
 
   @override
   Widget build(BuildContext context) {
-    final organizationContext = ref.watch(organizationContextProvider);
-    final organizationId =
-        organizationContext.currentOrganization?['organizationId'] as String?;
-    final roleId = organizationContext.currentRole?['roleId'] as String? ??
-        organizationContext.currentMembership?.roleId;
-    final access = ref.watch(adminAccessProvider).asData?.value;
-    final allowed = access?.isSuperAdmin == true ||
-        access?.canReviewReceipts == true ||
-        const ['chairman', 'financialManager', 'financialReviewer']
-            .contains(roleId);
-
+    final organizationId = ref
+        .watch(organizationContextProvider)
+        .currentOrganization?['organizationId'] as String?;
+    final access = ref.watch(adminAccessProvider).value;
+    final allowed =
+        access?.canReviewReceipts == true || access?.isPlatformOwner == true;
     return Directionality(
       textDirection: ui.TextDirection.rtl,
       child: Scaffold(
         backgroundColor: AppColors.background,
         appBar: AppBar(
-          title: const Text('مراجعة الإيصالات'),
-          backgroundColor: AppColors.primaryDark,
-          foregroundColor: Colors.white,
-        ),
+            title: const Text('مراجعة الإيصالات'),
+            backgroundColor: AppColors.primaryDark,
+            foregroundColor: Colors.white),
         body: organizationId == null || !allowed
-            ? const Center(child: Text('لا تملك صلاحية مراجعة الإيصالات'))
-            : _buildReceipts(organizationId),
+            ? const Center(
+                child: Text('لا تملك صلاحية مراجعة إيصالات هذا المجلس.'))
+            : ref.watch(pendingFinancialReceiptsProvider(organizationId)).when(
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (error, _) => Center(
+                    child: OutlinedButton.icon(
+                      onPressed: () => ref.invalidate(
+                          pendingFinancialReceiptsProvider(organizationId)),
+                      icon: const Icon(Icons.refresh),
+                      label: Text('تعذر تحميل الإيصالات: $error'),
+                    ),
+                  ),
+                  data: (items) => items.isEmpty
+                      ? const Center(
+                          child: Text('لا توجد إيصالات قيد المراجعة.'))
+                      : ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: items.length,
+                          itemBuilder: (_, index) {
+                            final receipt = items[index];
+                            return _ReceiptReviewCard(
+                              receipt: receipt,
+                              processing: _processing.contains(receipt.id),
+                              onApprove: () => _approve(receipt),
+                              onReject: () => _reject(receipt),
+                              onOpen: () => _openReceipt(receipt),
+                            );
+                          },
+                        ),
+                ),
       ),
     );
   }
-
-  Widget _buildReceipts(String organizationId) {
-    final receipts =
-        ref.watch(pendingFinancialReceiptsProvider(organizationId));
-    return receipts.when(
-      // لا نمسح قائمة معروضة عند إعادة التحميل: نُبقيها ونعرض الجديد فور وصوله.
-      skipLoadingOnReload: true,
-      skipLoadingOnRefresh: true,
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (error, stackTrace) {
-        // نُظهر الخطأ الحقيقي في السجل (فهرس/صلاحية/شبكة) بدل ابتلاعه.
-        debugPrint('[FinancialReview] pending stream error '
-            'org=$organizationId: $error\n$stackTrace');
-        return Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text('تعذر تحميل الإيصالات قيد المراجعة'),
-                const SizedBox(height: 6),
-                Text(
-                  _streamErrorHint(error),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                ),
-                const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  onPressed: () => ref.invalidate(
-                    pendingFinancialReceiptsProvider(organizationId),
-                  ),
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('إعادة المحاولة'),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-      data: (items) => items.isEmpty
-          ? const Center(child: Text('لا توجد إيصالات قيد الاعتماد'))
-          : RefreshIndicator(
-              onRefresh: () async => ref.invalidate(
-                pendingFinancialReceiptsProvider(organizationId),
-              ),
-              child: ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: items.length,
-                itemBuilder: (_, index) {
-                  final receipt = items[index];
-                  final processing = _isProcessing(receipt.id);
-                  return _ReceiptCard(
-                    key: ValueKey(receipt.id),
-                    receipt: receipt,
-                    processing: processing,
-                    onView: processing ? null : () => _openReceipt(receipt),
-                    onApprove: processing ? null : () => _approve(receipt),
-                    onReject: processing ? null : () => _reject(receipt),
-                  );
-                },
-              ),
-            ),
-    );
-  }
-
-  String _streamErrorHint(Object error) {
-    final text = error.toString().toLowerCase();
-    if (text.contains('failed-precondition') || text.contains('index')) {
-      return 'الفهرس المطلوب غير مُهيّأ بعد. يرجى المحاولة بعد قليل.';
-    }
-    if (text.contains('permission-denied') || text.contains('unauthorized')) {
-      return 'ليست لديك صلاحية عرض هذه الإيصالات.';
-    }
-    return 'تحقّق من الاتصال ثم أعد المحاولة.';
-  }
 }
 
-class _ReceiptCard extends StatelessWidget {
-  const _ReceiptCard({
-    super.key,
-    required this.receipt,
-    required this.processing,
-    required this.onView,
-    required this.onApprove,
-    required this.onReject,
-  });
-
+class _ReceiptReviewCard extends StatelessWidget {
+  const _ReceiptReviewCard(
+      {required this.receipt,
+      required this.processing,
+      required this.onApprove,
+      required this.onReject,
+      required this.onOpen});
   final TransactionModel receipt;
   final bool processing;
-
-  /// كل الإجراءات nullable: قيمتها null تعني معطّلة (أثناء المعالجة).
-  final VoidCallback? onView;
-  final VoidCallback? onApprove;
-  final VoidCallback? onReject;
+  final VoidCallback onApprove;
+  final VoidCallback onReject;
+  final VoidCallback onOpen;
 
   @override
   Widget build(BuildContext context) {
+    final matchColor = receipt.amountsMatch ? Colors.green : Colors.deepOrange;
+    final beneficiaries =
+        receipt.allocations.map((item) => item.beneficiaryName).toSet();
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 16),
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(receipt.memberName,
-                style:
-                    const TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text('رقم العضو: ${receipt.memberNumber ?? '-'}'),
-            Text('الهاتف: ${receipt.memberPhone ?? '-'}'),
-            Text(
-                'المبلغ: ${receipt.amountDeclared?.toStringAsFixed(3) ?? '-'}'),
-            Text('فترة الدفع: ${receipt.paymentPeriod ?? '-'}'),
-            Text(
-                'التاريخ: ${DateFormat('yyyy/MM/dd - HH:mm').format(receipt.submittedAt)}'),
-            const Text('الحالة: قيد المراجعة'),
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              // معطّل أثناء المعالجة: لا يُفتح الإيصال لحظة رفضه/اعتماده.
-              onPressed: onView,
-              icon: const Icon(Icons.open_in_new),
-              label: const Text('عرض الإيصال'),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            CircleAvatar(
+                child: Text(receipt.payerName.isEmpty
+                    ? '?'
+                    : receipt.payerName.characters.first)),
+            const SizedBox(width: 10),
+            Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text(receipt.payerName,
+                      style: const TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.bold)),
+                  Text('رقم العضوية: ${receipt.memberNumber ?? '-'}'),
+                  Text(
+                      'أُرسل: ${DateFormat('yyyy/MM/dd - HH:mm').format(receipt.submittedAt)}'),
+                ])),
+          ]),
+          const Divider(height: 26),
+          const Text('المبلغ الذي أدخله الدافع'),
+          Text(formatBaisa(receipt.amountDeclaredBaisa),
+              style:
+                  const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
+          Text('إجمالي التوزيع: ${formatBaisa(receipt.allocationTotalBaisa)}'),
+          Text('الفرق: ${formatBaisa(receipt.differenceBaisa)}'),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+                color: matchColor.withValues(alpha: .08),
+                border: Border.all(color: matchColor),
+                borderRadius: BorderRadius.circular(10)),
+            child: Row(children: [
+              Icon(
+                  receipt.amountsMatch
+                      ? Icons.check_circle
+                      : Icons.warning_amber,
+                  color: matchColor),
+              const SizedBox(width: 8),
+              Text(
+                  receipt.amountsMatch
+                      ? 'المبلغ مطابق للتوزيع'
+                      : 'يوجد فرق - الاعتماد معطل',
+                  style: TextStyle(
+                      color: matchColor, fontWeight: FontWeight.bold)),
+            ]),
+          ),
+          const SizedBox(height: 14),
+          Text('الأعضاء المدفوع عنهم (${beneficiaries.length})',
+              style: const TextStyle(fontWeight: FontWeight.bold)),
+          for (final allocation in receipt.allocations)
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.person_outline),
+              title: Text(allocation.beneficiaryName),
+              subtitle: Text(
+                  '${allocation.chargeTitle}\nالرصيد عند الإرسال: ${formatBaisa(allocation.balanceBeforeBaisa)}'),
+              trailing: Text(formatBaisa(allocation.amountAllocatedBaisa),
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
             ),
-            const SizedBox(height: 8),
-            if (processing)
-              const Center(child: CircularProgressIndicator())
-            else
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
+          OutlinedButton.icon(
+            onPressed: onOpen,
+            icon: const Icon(Icons.open_in_new),
+            label: Text(receipt.fileType == 'application/pdf'
+                ? 'فتح ملف PDF'
+                : 'عرض صورة الإيصال'),
+          ),
+          const SizedBox(height: 10),
+          if (processing)
+            const Center(child: CircularProgressIndicator())
+          else
+            Row(children: [
+              Expanded(
+                  child: OutlinedButton.icon(
                       onPressed: onReject,
-                      child: const Text('رفض'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: onApprove,
-                      child: const Text('اعتماد'),
-                    ),
-                  ),
-                ],
-              ),
-          ],
-        ),
+                      icon: const Icon(Icons.close, color: Colors.red),
+                      label: const Text('رفض'))),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: FilledButton.icon(
+                      onPressed: receipt.amountsMatch ? onApprove : null,
+                      icon: const Icon(Icons.check),
+                      label: const Text('اعتماد'))),
+            ]),
+        ]),
       ),
     );
   }

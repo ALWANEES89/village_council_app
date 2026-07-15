@@ -59,6 +59,8 @@ npm-debug.log*
 firebase-debug.log*
 firestore-debug.log*
 dataconnect-generated/
+.claude/settings.local.json
+.firebase-cli-config/
 
 # ملفات بيانات حسّاسة (أرقام حسابات) — لا تُرفع
 *.xlsx

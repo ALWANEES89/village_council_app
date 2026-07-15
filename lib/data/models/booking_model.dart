@@ -15,6 +15,9 @@ class BookingModel {
     this.startTime,
     this.endTime,
     this.rejectionReason,
+    this.cancellationReason,
+    this.financialChargeId,
+    this.financialAccountType,
   });
 
   final String bookingId;
@@ -30,6 +33,9 @@ class BookingModel {
   final String notes;
   final String status;
   final String? rejectionReason;
+  final String? cancellationReason;
+  final String? financialChargeId;
+  final String? financialAccountType;
 
   factory BookingModel.fromFirestore(
     DocumentSnapshot<Map<String, dynamic>> document,
@@ -52,6 +58,9 @@ class BookingModel {
       notes: data['notes'] as String? ?? '',
       status: data['status'] as String? ?? 'pending',
       rejectionReason: data['rejectionReason'] as String?,
+      cancellationReason: data['cancellationReason'] as String?,
+      financialChargeId: data['financialChargeId'] as String?,
+      financialAccountType: data['financialAccountType'] as String?,
     );
   }
 }

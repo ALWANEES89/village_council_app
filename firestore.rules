@@ -122,6 +122,23 @@ service cloud.firestore {
           ])));
     }
 
+    function canManageFinance(organizationId) {
+      let membershipPath = /databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid);
+      return isSystemOwner() || isOrgOwner(organizationId) ||
+        (isAuth() && exists(membershipPath) &&
+         get(membershipPath).data.get('status', '') == 'active' &&
+         get(membershipPath).data.get('permissionsSnapshot', []).hasAny([
+           'fullAccess', 'payments.manage', 'receipts.review'
+         ]));
+    }
+
+    function ownsMembership(organizationId, membershipId) {
+      let membershipPath = /databases/$(database)/documents/organizations/$(organizationId)/memberships/$(membershipId);
+      return isAuth() && exists(membershipPath) &&
+        get(membershipPath).data.get('status', '') == 'active' &&
+        get(membershipPath).data.get('userId', '') == request.auth.uid;
+    }
+
     function canReviewBookings(organizationId) {
       let membershipPath = /databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid);
       return isSuperAdmin() ||
@@ -414,6 +431,51 @@ service cloud.firestore {
         allow update, delete: if canManageRoles(organizationId);
       }
 
+      match /financial_settings/{settingsId} {
+        allow read: if isOrganizationMember(organizationId) ||
+          isSystemOwner() || canManageFinance(organizationId);
+        allow create, update, delete: if false;
+      }
+
+      match /subscription_plans/{planId} {
+        allow read: if isOrganizationMember(organizationId) ||
+          isSystemOwner() || canManageFinance(organizationId);
+        allow create, update, delete: if false;
+      }
+
+      match /member_accounts/{membershipId} {
+        allow get, list: if canManageFinance(organizationId) ||
+          ownsMembership(organizationId, membershipId);
+        allow create, update, delete: if false;
+      }
+
+      match /member_directory/{membershipId} {
+        // Directory search/list is server-mediated to enforce query length,
+        // result limits, active membership, and a minimal public projection.
+        allow read, create, update, delete: if false;
+      }
+
+      match /charges/{chargeId} {
+        allow get, list: if canManageFinance(organizationId) ||
+          (isAuth() && resource.data.get('accountType', 'member') == 'guest' &&
+           resource.data.userId == request.auth.uid) ||
+          ownsMembership(organizationId, resource.data.membershipId);
+        allow create, update, delete: if false;
+      }
+
+      match /pending_receipt_locks/{lockId} {
+        allow read, write: if false;
+      }
+
+      match /financial_rate_limits/{userId} {
+        allow read, write: if false;
+      }
+
+      match /financial_notification_outbox/{outboxId} {
+        // يُنشأ ذريًا مع العملية المالية ويُسلّم بواسطة Cloud Function فقط.
+        allow read, write: if false;
+      }
+
       match /settings/{settingId} {
         allow read: if isAuth();
         allow create: if canManageRoles(organizationId) ||
@@ -548,32 +610,34 @@ service cloud.firestore {
         // get (مستند مفرد): المالك الأعلى، أو صاحب المعاملة، أو مراجع الإيصالات.
         allow get: if isSystemOwner() ||
           (isAuth() &&
-           (resource.data.userId == request.auth.uid ||
+           (resource.data.payerUserId == request.auth.uid ||
+            resource.data.userId == request.auth.uid ||
+            resource.data.get('beneficiaryUserIds', []).hasAny([request.auth.uid]) ||
             canReviewReceipts(organizationId)));
         // list (استعلام): لا يشير إلى resource.data حتى لا يُرفض الاستعلام غير
         // المقيّد (شاشة مراجعة الإيصالات) — تحليل الاستعلام أصرم من فحص المستند
         // المفرد، ووجود resource.data.userId في قاعدة list كان يرفض الاستعلام
         // حتى للمالك الأعلى. المراجع/المالك فقط يستعلمان قائمة إيصالات المجلس.
-        allow list: if isSystemOwner() || canReviewReceipts(organizationId);
-        allow create: if isAuth() &&
-          request.resource.data.transactionId == transactionId &&
-          request.resource.data.organizationId == organizationId &&
-          request.resource.data.userId == request.auth.uid &&
-          request.resource.data.uploadedByUserId == request.auth.uid &&
-          request.resource.data.status == 'pendingReview' &&
-          request.resource.data.reviewStatus == 'pending';
-        allow update: if isSystemOwner() || canReviewReceipts(organizationId);
+        allow list: if isSystemOwner() || canReviewReceipts(organizationId) ||
+          (isAuth() && resource.data.payerUserId == request.auth.uid) ||
+          ownsMembership(organizationId, resource.data.payerMembershipId);
+        // الإنشاء والتوزيع والاعتماد والرفض تتم حصريًا عبر Cloud Functions.
+        allow create, update: if false;
         allow delete: if false;
       }
 
       match /bookings/{bookingId} {
-        allow read: if isAuth();
+        allow get: if isAuth() &&
+          (resource.data.userId == request.auth.uid || canReviewBookings(organizationId));
+        allow list: if isOrganizationMember(organizationId) || canReviewBookings(organizationId) ||
+          (isAuth() && resource.data.userId == request.auth.uid);
         allow create: if isAuth() &&
           request.resource.data.bookingId == bookingId &&
           request.resource.data.organizationId == organizationId &&
           request.resource.data.userId == request.auth.uid &&
           request.resource.data.status == 'pending' &&
-          ((exists(/databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.resource.data.membershipId)) &&
+          ((request.resource.data.get('membershipId', '') != '' &&
+            exists(/databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.resource.data.membershipId)) &&
             get(/databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.resource.data.membershipId)).data.status == 'active' &&
             (request.resource.data.membershipId == request.auth.uid ||
              get(/databases/$(database)/documents/organizations/$(organizationId)/memberships/$(request.resource.data.membershipId)).data.userId == request.auth.uid)) ||
@@ -590,7 +654,7 @@ service cloud.firestore {
 
       // Bootstrap markers and future organization modules are platform-owned.
       match /{module}/{documentId} {
-        allow read: if isAuth();
+        allow read: if isSystemOwner();
         allow create, update: if isSuperAdmin();
         allow delete: if false;
       }

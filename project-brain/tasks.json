@@ -1,4 +1,4 @@
-﻿[
+[
   {
     "id": "TASK-001",
     "title": "إنشاء هيكل عقل المشروع",
@@ -22,5 +22,13 @@
     "status": "in_progress",
     "progress": 40,
     "priority": "medium"
+  },
+  {
+    "id": "TASK-004",
+    "title": "المرحلة الأولى للنظام المالي وDashboard ملخص الحساب",
+    "area": "النظام المالي والاشتراكات",
+    "status": "in_progress",
+    "progress": 95,
+    "priority": "high"
   }
 ]

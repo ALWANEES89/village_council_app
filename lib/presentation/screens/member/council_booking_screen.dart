@@ -3,11 +3,14 @@ import 'dart:ui' as ui;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/booking_model.dart';
 import '../../../providers/app_providers.dart';
+import '../../widgets/reason_input_dialog.dart';
+import 'guest_booking_receipt_screen.dart';
 
 class CouncilBookingArguments {
   const CouncilBookingArguments({this.organizationId, this.membershipId});
@@ -180,11 +183,58 @@ class _CouncilBookingScreenState extends ConsumerState<CouncilBookingScreen> {
     }
   }
 
+  Future<void> _requestCancellation(BookingModel booking) async {
+    final reason = await showReasonDialog(
+      context: context,
+      title: booking.status == 'approved' ? 'طلب إلغاء الحجز' : 'إلغاء الحجز',
+      hint: 'سبب الإلغاء (اختياري)',
+      actionLabel: booking.status == 'approved' ? 'إرسال الطلب' : 'إلغاء الحجز',
+      required: false,
+      confirmColor: Colors.red,
+    );
+    if (!mounted || reason == null) return;
+    try {
+      final status =
+          await ref.read(bookingRepositoryProvider).requestCancellation(
+                organizationId: booking.organizationId,
+                bookingId: booking.bookingId,
+                reason: reason,
+              );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(status == 'cancelled'
+              ? 'تم إلغاء الحجز.'
+              : 'تم إرسال طلب الإلغاء للإدارة.'),
+        ));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('تعذر إلغاء الحجز: $error')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final user = ref.watch(authStateProvider).value;
+    final guestMode = _membershipId?.isNotEmpty != true;
     final bookings = _organizationId == null
         ? null
-        : ref.watch(organizationBookingsProvider(_organizationId!));
+        : guestMode
+            ? ref.watch(bookingAvailabilityProvider((
+                organizationId: _organizationId!,
+                year: _visibleMonth.year,
+                month: _visibleMonth.month,
+              )))
+            : ref.watch(organizationBookingsProvider(_organizationId!));
+    final ownBookings = _organizationId == null || user == null
+        ? null
+        : ref.watch(userBookingsProvider((
+            organizationId: _organizationId!,
+            userId: user.uid,
+          )));
     return Directionality(
       textDirection: ui.TextDirection.rtl,
       child: Scaffold(
@@ -273,6 +323,72 @@ class _CouncilBookingScreenState extends ConsumerState<CouncilBookingScreen> {
                     onPressed: _submitBooking,
                     icon: const Icon(Icons.send),
                     label: const Text('طلب حجز هذا اليوم'),
+                  ),
+                const SizedBox(height: 20),
+                if (ownBookings != null)
+                  ownBookings.when(
+                    loading: () => const LinearProgressIndicator(),
+                    error: (_, __) => const Text('تعذر تحميل حجوزاتك.'),
+                    data: (items) => Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'حجوزاتي',
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        if (items.isEmpty) const Text('لا توجد حجوزات سابقة.'),
+                        for (final booking in items)
+                          Card(
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(DateFormat('yyyy/MM/dd')
+                                      .format(booking.bookingDate)),
+                                  Text('الحالة: ${booking.status}'),
+                                  if (booking.financialChargeId != null)
+                                    const Text(
+                                        'تم إنشاء رسم الحجز. افتح تفاصيل الدفع لعرض المبلغ والحالة.'),
+                                  Wrap(
+                                    spacing: 8,
+                                    children: [
+                                      if (booking.status == 'pending' ||
+                                          booking.status == 'approved')
+                                        TextButton.icon(
+                                          onPressed: () =>
+                                              _requestCancellation(booking),
+                                          icon:
+                                              const Icon(Icons.cancel_outlined),
+                                          label: Text(
+                                              booking.status == 'approved'
+                                                  ? 'طلب إلغاء'
+                                                  : 'إلغاء'),
+                                        ),
+                                      if (booking.financialAccountType ==
+                                              'guest' &&
+                                          booking.financialChargeId != null)
+                                        TextButton.icon(
+                                          onPressed: () => context.pushNamed(
+                                            'guestBookingReceipt',
+                                            extra: GuestBookingReceiptArguments(
+                                              organizationId:
+                                                  booking.organizationId,
+                                              bookingId: booking.bookingId,
+                                            ),
+                                          ),
+                                          icon: const Icon(Icons.receipt_long),
+                                          label: const Text('المبلغ والدفع'),
+                                        ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
               ],
             );

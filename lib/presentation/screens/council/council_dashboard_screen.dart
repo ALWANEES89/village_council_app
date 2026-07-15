@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../data/models/financial_models.dart';
 import '../../../data/models/membership_model.dart';
 import '../../../providers/app_providers.dart';
 import '../member/council_booking_screen.dart';
@@ -97,13 +98,12 @@ class CouncilDashboardScreen extends ConsumerWidget {
         'رفع إيصال',
         () => context.pushNamed(
           'uploadReceipt',
-          extra: {
-            'organizationId': organizationId,
-            'membershipId': membership?.id,
-            'userId': authUser?.uid,
-            'paymentId': null,
-            'periodLabel': 'إيصال دفع عام',
-          },
+          extra: ReceiptUploadArguments(
+            organizationId: organizationId,
+            membershipId: membership?.id,
+            userId: authUser?.uid,
+            periodLabel: 'إيصال دفع عام',
+          ),
         ),
       ),
       _CouncilAction(

@@ -239,6 +239,30 @@ class AdminDashboard extends ConsumerWidget {
                         ),
                       ),
                     ],
+                    if (access?.canManageFinance == true &&
+                        organizationId != null) ...[
+                      const SizedBox(height: 10),
+                      Card(
+                        margin: EdgeInsets.zero,
+                        child: ListTile(
+                          leading: const CircleAvatar(
+                            backgroundColor: AppColors.primary,
+                            foregroundColor: Colors.white,
+                            child: Icon(Icons.account_balance_wallet_outlined),
+                          ),
+                          title: const Text(
+                            'إدارة الرسوم والاشتراكات',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          subtitle: const Text(
+                            'إعدادات الرسوم والباقات وحسابات الأعضاء',
+                          ),
+                          trailing:
+                              const Icon(Icons.arrow_forward_ios, size: 18),
+                          onTap: () => context.pushNamed('financialManagement'),
+                        ),
+                      ),
+                    ],
                     if (access?.isSuperAdmin == true) ...[
                       const SizedBox(height: 10),
                       _AdminActionCard(
@@ -486,8 +510,8 @@ class _PendingCard extends StatelessWidget {
           'adminReview',
           pathParameters: {'id': tx.id},
           queryParameters: {
-            if (tx.organizationId?.isNotEmpty == true)
-              'organizationId': tx.organizationId!,
+            if (tx.organizationId.isNotEmpty)
+              'organizationId': tx.organizationId,
           },
         ),
         child: Padding(

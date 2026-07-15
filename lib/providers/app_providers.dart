@@ -1,39 +1,36 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:uuid/uuid.dart';
+
+import '../core/auth/admin_access.dart';
+import '../core/context/organization_context.dart';
+import '../data/models/app_notification_model.dart';
+import '../data/models/booking_model.dart';
+import '../data/models/financial_models.dart';
 import '../data/models/member_model.dart';
 import '../data/models/membership_model.dart';
 import '../data/models/payment_model.dart';
 import '../data/models/transaction_model.dart';
 import '../data/models/user_profile_model.dart';
+import '../data/repositories/booking_repository.dart';
+import '../data/repositories/financial_receipt_repository.dart';
+import '../data/repositories/financial_repository.dart';
+import '../data/repositories/membership_repository.dart';
+import '../data/repositories/notification_repository.dart';
+import '../data/repositories/organization_repository.dart';
+import '../data/repositories/platform_admin_repository.dart';
+import '../data/repositories/role_repository.dart';
+import '../data/repositories/user_repository.dart';
 import '../data/services/auth_service.dart';
 import '../data/services/firestore_service.dart';
 import '../data/services/storage_service.dart';
-import '../data/repositories/user_repository.dart';
-import '../data/repositories/membership_repository.dart';
-import '../data/repositories/organization_repository.dart';
-import '../data/repositories/role_repository.dart';
-import '../data/repositories/platform_admin_repository.dart';
-import '../data/repositories/financial_receipt_repository.dart';
-import '../data/repositories/booking_repository.dart';
-import '../data/models/booking_model.dart';
-import '../data/models/app_notification_model.dart';
-import '../data/repositories/notification_repository.dart';
-import '../core/context/organization_context.dart';
-import '../core/auth/admin_access.dart';
 
-// ── Services ──────────────────────────────────────────────────────────────────
 final authServiceProvider = Provider((ref) => AuthService());
 final firestoreServiceProvider = Provider((ref) => FirestoreService());
 final storageServiceProvider = Provider((ref) => StorageService());
 
-// â”€â”€ Repositories â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 final userRepositoryProvider = Provider((ref) => UserRepository());
-final userProfileProvider =
-    StreamProvider.family<UserProfileModel?, String>((ref, userId) {
-  return ref.watch(userRepositoryProvider).streamProfile(userId);
-});
 final membershipRepositoryProvider = Provider((ref) => MembershipRepository());
 final organizationRepositoryProvider =
     Provider((ref) => OrganizationRepository());
@@ -42,14 +39,23 @@ final platformAdminRepositoryProvider =
     Provider((ref) => PlatformAdminRepository());
 final financialReceiptRepositoryProvider =
     Provider((ref) => FinancialReceiptRepository());
+final financialRepositoryProvider = Provider((ref) => FinancialRepository());
 final bookingRepositoryProvider = Provider((ref) => BookingRepository());
 final notificationRepositoryProvider =
     Provider((ref) => NotificationRepository());
 
+final authStateProvider = StreamProvider<User?>(
+    (ref) => ref.watch(authServiceProvider).authStateChanges);
+
+final userProfileProvider = StreamProvider.family<UserProfileModel?, String>(
+  (ref, userId) => ref.watch(userRepositoryProvider).streamProfile(userId),
+);
+
 final userNotificationsProvider =
-    StreamProvider.family<List<AppNotificationModel>, String>((ref, userId) {
-  return ref.watch(notificationRepositoryProvider).streamForUser(userId);
-});
+    StreamProvider.family<List<AppNotificationModel>, String>(
+  (ref, userId) =>
+      ref.watch(notificationRepositoryProvider).streamForUser(userId),
+);
 
 final unreadNotificationsCountProvider =
     Provider.family<int, String>((ref, userId) {
@@ -60,19 +66,33 @@ final unreadNotificationsCountProvider =
 });
 
 final organizationBookingsProvider =
-    StreamProvider.family<List<BookingModel>, String>((ref, organizationId) {
-  return ref
+    StreamProvider.family<List<BookingModel>, String>(
+  (ref, organizationId) => ref
       .watch(bookingRepositoryProvider)
-      .streamForOrganization(organizationId);
-});
+      .streamForOrganization(organizationId),
+);
+
+final userBookingsProvider = StreamProvider.autoDispose
+    .family<List<BookingModel>, ({String organizationId, String userId})>(
+  (ref, key) => ref
+      .watch(bookingRepositoryProvider)
+      .streamForUser(key.organizationId, key.userId),
+);
+
+final bookingAvailabilityProvider = FutureProvider.autoDispose
+    .family<List<BookingModel>, ({String organizationId, int year, int month})>(
+  (ref, key) => ref.watch(bookingRepositoryProvider).getAvailability(
+        organizationId: key.organizationId,
+        month: DateTime(key.year, key.month),
+      ),
+);
 
 final pendingFinancialReceiptsProvider =
     StreamProvider.family<List<TransactionModel>, String>(
-        (ref, organizationId) {
-  return ref
+  (ref, organizationId) => ref
       .watch(financialReceiptRepositoryProvider)
-      .streamPending(organizationId);
-});
+      .streamPending(organizationId),
+);
 
 final organizationContextProvider =
     StateNotifierProvider<OrganizationContextNotifier, OrganizationContext>(
@@ -85,42 +105,39 @@ final organizationContextProvider =
 });
 
 final userMembershipsProvider =
-    StreamProvider.family<List<MembershipModel>, String>((ref, userId) {
-  return ref.watch(membershipRepositoryProvider).streamForUser(userId);
-});
+    StreamProvider.family<List<MembershipModel>, String>(
+  (ref, userId) =>
+      ref.watch(membershipRepositoryProvider).streamForUser(userId),
+);
 
 typedef MembershipDocumentLookup = ({
   String organizationId,
-  String membershipId,
+  String membershipId
 });
 
 final membershipDocumentProvider =
     StreamProvider.family<MembershipModel?, MembershipDocumentLookup>(
-        (ref, lookup) {
-  return ref.watch(membershipRepositoryProvider).stream(
+  (ref, lookup) => ref.watch(membershipRepositoryProvider).stream(
         organizationId: lookup.organizationId,
         membershipId: lookup.membershipId,
-      );
-});
+      ),
+);
 
 final activeUserMembershipsProvider =
-    StreamProvider.family<ActiveMembershipsResult, String>((ref, userId) {
-  return ref.watch(membershipRepositoryProvider).streamActiveForUser(userId);
-});
+    StreamProvider.family<ActiveMembershipsResult, String>(
+  (ref, userId) =>
+      ref.watch(membershipRepositoryProvider).streamActiveForUser(userId),
+);
 
-final organizationsProvider = StreamProvider<List<Map<String, dynamic>>>((ref) {
-  return ref.watch(organizationRepositoryProvider).streamAll();
-});
+final organizationsProvider = StreamProvider<List<Map<String, dynamic>>>(
+  (ref) => ref.watch(organizationRepositoryProvider).streamAll(),
+);
 
 final organizationDetailsProvider =
-    FutureProvider.family<Map<String, dynamic>?, String>((ref, organizationId) {
-  return ref.watch(organizationRepositoryProvider).getById(organizationId);
-});
-
-// ── Auth State ────────────────────────────────────────────────────────────────
-final authStateProvider = StreamProvider<User?>((ref) {
-  return ref.watch(authServiceProvider).authStateChanges;
-});
+    FutureProvider.family<Map<String, dynamic>?, String>(
+  (ref, organizationId) =>
+      ref.watch(organizationRepositoryProvider).getById(organizationId),
+);
 
 final currentMemberProvider = FutureProvider<MemberModel?>((ref) async {
   final user = ref.watch(authStateProvider).value;
@@ -135,17 +152,13 @@ final adminAccessProvider = FutureProvider<AdminAccess>((ref) async {
   MemberModel? member;
   try {
     member = await ref.watch(currentMemberProvider.future);
-  } catch (_) {
-    // Super Admin claims and profile flags can still grant platform access.
-  }
+  } catch (_) {}
   var isSuperAdmin = false;
   try {
     isSuperAdmin = await ref
         .read(platformAdminRepositoryProvider)
         .isActiveSuperAdmin(user.uid);
-  } catch (_) {
-    // A failed platform lookup must not elevate access.
-  }
+  } catch (_) {}
   final membership = organizationContext.currentMembership;
   return AdminAccess(
     isSuperAdmin: isSuperAdmin,
@@ -165,181 +178,158 @@ final currentPlatformAdminProvider =
   return ref.watch(platformAdminRepositoryProvider).stream(user.uid);
 });
 
-// ── Member Data ───────────────────────────────────────────────────────────────
-final memberStreamProvider =
-    StreamProvider.family<MemberModel?, String>((ref, memberId) {
-  return ref.watch(firestoreServiceProvider).memberStream(memberId);
-});
-
+final memberStreamProvider = StreamProvider.family<MemberModel?, String>(
+  (ref, memberId) => ref.watch(firestoreServiceProvider).memberStream(memberId),
+);
 final memberPaymentsProvider =
-    StreamProvider.family<List<PaymentModel>, String>((ref, memberId) {
-  return ref.watch(firestoreServiceProvider).memberPaymentsStream(memberId);
-});
-
+    StreamProvider.family<List<PaymentModel>, String>(
+  (ref, memberId) =>
+      ref.watch(firestoreServiceProvider).memberPaymentsStream(memberId),
+);
 final memberTransactionsProvider =
-    StreamProvider.family<List<TransactionModel>, String>((ref, memberId) {
-  return ref.watch(firestoreServiceProvider).memberTransactionsStream(memberId);
-});
-
+    StreamProvider.family<List<TransactionModel>, String>(
+  (ref, memberId) =>
+      ref.watch(firestoreServiceProvider).memberTransactionsStream(memberId),
+);
 final totalPaidThisYearProvider =
-    FutureProvider.family<double, String>((ref, memberId) async {
-  return ref.watch(firestoreServiceProvider).getTotalPaidThisYear(
-        memberId,
-        DateTime.now().year,
-      );
+    FutureProvider.family<double, String>((ref, memberId) {
+  return ref
+      .watch(firestoreServiceProvider)
+      .getTotalPaidThisYear(memberId, DateTime.now().year);
 });
-
-// ── Admin ─────────────────────────────────────────────────────────────────────
-final pendingTransactionsProvider =
-    StreamProvider<List<TransactionModel>>((ref) {
-  return ref.watch(firestoreServiceProvider).pendingTransactionsStream();
-});
-
-final adminStatsProvider = FutureProvider<Map<String, dynamic>>((ref) async {
+final pendingTransactionsProvider = StreamProvider<List<TransactionModel>>(
+  (ref) => ref.watch(firestoreServiceProvider).pendingTransactionsStream(),
+);
+final adminStatsProvider = FutureProvider<Map<String, dynamic>>((ref) {
   final now = DateTime.now();
   return ref.watch(firestoreServiceProvider).getAdminStats(now.year, now.month);
 });
 
-// ── Receipt Upload State ──────────────────────────────────────────────────────
+final financialSettingsProvider =
+    StreamProvider.autoDispose.family<FinancialSettings, String>(
+  (ref, organizationId) =>
+      ref.watch(financialRepositoryProvider).streamSettings(organizationId),
+);
+final subscriptionPlansProvider =
+    StreamProvider.autoDispose.family<List<SubscriptionPlan>, String>(
+  (ref, organizationId) =>
+      ref.watch(financialRepositoryProvider).streamPlans(organizationId),
+);
+final memberAccountProvider =
+    StreamProvider.autoDispose.family<MemberAccount?, MemberFinancialKey>(
+  (ref, key) => ref.watch(financialRepositoryProvider).streamMemberAccount(key),
+);
+final memberChargesProvider = StreamProvider.autoDispose
+    .family<List<FinancialCharge>, MemberFinancialKey>(
+  (ref, key) => ref.watch(financialRepositoryProvider).streamMemberCharges(key),
+);
+final payerFinancialTransactionsProvider = StreamProvider.autoDispose
+    .family<List<TransactionModel>, MemberFinancialKey>(
+  (ref, key) =>
+      ref.watch(financialRepositoryProvider).streamPayerTransactions(key),
+);
+final financialMemberDirectoryProvider =
+    FutureProvider.autoDispose.family<List<MemberDirectoryEntry>, String>(
+  (ref, organizationId) => ref
+      .watch(financialRepositoryProvider)
+      .listFinancialMembers(organizationId),
+);
+final organizationChargesProvider =
+    StreamProvider.autoDispose.family<List<FinancialCharge>, String>(
+  (ref, organizationId) => ref
+      .watch(financialRepositoryProvider)
+      .streamOrganizationCharges(organizationId),
+);
+
+typedef FinancialTransactionKey = ({
+  String organizationId,
+  String transactionId
+});
+
+final financialTransactionProvider = StreamProvider.autoDispose
+    .family<TransactionModel?, FinancialTransactionKey>(
+  (ref, key) => ref.watch(financialRepositoryProvider).streamTransaction(
+        organizationId: key.organizationId,
+        transactionId: key.transactionId,
+      ),
+);
+
 class UploadState {
+  const UploadState({this.isUploading = false, this.progress = 0, this.error});
   final bool isUploading;
   final double progress;
   final String? error;
 
-  const UploadState({
-    this.isUploading = false,
-    this.progress = 0,
-    this.error,
-  });
-
-  UploadState copyWith({bool? isUploading, double? progress, String? error}) {
-    return UploadState(
-      isUploading: isUploading ?? this.isUploading,
-      progress: progress ?? this.progress,
-      error: error,
-    );
-  }
+  UploadState copyWith({bool? isUploading, double? progress, String? error}) =>
+      UploadState(
+        isUploading: isUploading ?? this.isUploading,
+        progress: progress ?? this.progress,
+        error: error,
+      );
 }
 
 class UploadNotifier extends StateNotifier<UploadState> {
-  UploadNotifier(
-    this._firestoreService,
-    this._storageService,
-    this._notificationRepository,
-  ) : super(const UploadState());
+  UploadNotifier(this._storageService, this._financialRepository)
+      : super(const UploadState());
 
-  final FirestoreService _firestoreService;
   final StorageService _storageService;
-  final NotificationRepository _notificationRepository;
+  final FinancialRepository _financialRepository;
 
   Future<bool> uploadReceipt({
     required dynamic file,
-    required String memberId,
-    required String memberName,
-    required String paymentId,
-    required String periodLabel,
-    String? organizationId,
-    String? membershipId,
-    double? amountDeclared,
-    String? paymentPeriod,
-    String? memberNumber,
-    String? memberPhone,
+    required String organizationId,
+    required String membershipId,
+    required PaymentScope paymentScope,
+    required int amountDeclaredBaisa,
+    required List<ReceiptAllocation> allocations,
   }) async {
-    state = const UploadState(isUploading: true, progress: 0);
+    state = const UploadState(isUploading: true);
+    String? uploadedReceiptPath;
     try {
-      if (organizationId == null || organizationId.trim().isEmpty) {
-        throw StateError('Missing organization context.');
-      }
-      // الإيصال يخصّ دائمًا المستخدم المسجّل الحالي. قواعد Storage وقواعد إنشاء
-      // معاملة Firestore تشترطان أن يكون المالك == auth.uid، لذا لا نثق بأي
-      // معرّف ممرّر (قد يكون معرّف مستند members قديمًا مختلفًا عن الـ uid،
-      // فيسبّب firebase_storage/unauthorized). المصدر الموثوق الوحيد للهوية.
       final ownerUserId = FirebaseAuth.instance.currentUser?.uid;
-      if (ownerUserId == null) {
-        throw StateError('User is not authenticated.');
+      if (ownerUserId == null) throw StateError('User is not authenticated.');
+      if (organizationId.isEmpty ||
+          membershipId.isEmpty ||
+          allocations.isEmpty) {
+        throw StateError('Missing financial receipt data.');
       }
-      // تحقّق تشخيصي (debug فقط): يؤكّد أن مالك الإيصال = auth.uid وأنه قد يختلف
-      // عن أي معرّف عضو قديم مُمرّر من الشاشة.
-      debugPrint('[Receipts] auth.uid=$ownerUserId passedMemberId=$memberId '
-          'match=${ownerUserId == memberId} org=$organizationId');
       final receiptId = const Uuid().v4();
       final upload = await _storageService.uploadReceipt(
         file: file,
         memberId: ownerUserId,
         organizationId: organizationId,
         receiptId: receiptId,
-        onProgress: (p) => state = state.copyWith(progress: p),
+        onProgress: (progress) => state = state.copyWith(progress: progress),
       );
-
-      final txId = await _firestoreService.createOrganizationReceiptTransaction(
-        transactionId: receiptId,
+      uploadedReceiptPath = upload.fullPath;
+      final transactionId = await _financialRepository.submitReceipt(
+        receiptId: receiptId,
         organizationId: organizationId,
-        userId: ownerUserId,
-        membershipId: membershipId ?? ownerUserId,
-        receiptStoragePath: upload.fullPath,
+        payerMembershipId: membershipId,
+        paymentScope: paymentScope,
+        amountDeclaredBaisa: amountDeclaredBaisa,
         receiptUrl: upload.url,
+        receiptStoragePath: upload.fullPath,
         fileName: upload.fileName,
         fileType: upload.fileType,
-        fileSize: upload.fileSize,
-        paymentId: paymentId,
-        memberName: memberName,
-        memberNumber: memberNumber,
-        memberPhone: memberPhone,
-        amountDeclared: amountDeclared,
-        paymentPeriod: paymentPeriod,
+        allocations: allocations,
       );
-      debugPrint('[Receipts] transaction created id=$txId '
-          'userId=uploadedByUserId=$ownerUserId (== auth.uid)');
-
-      // The transaction is the authoritative result. Notifications and the
-      // legacy payment mirror must never turn a successful submission into a
-      // reported upload failure.
-      await _notificationRepository.notifyOrganizationReviewers(
-        organizationId: organizationId,
-        permissions: const [
-          'receipts.review',
-          'payments.approve',
-          'payments.reject',
-        ],
-        title: 'إيصال جديد للمراجعة',
-        body: 'تم إرسال إيصال دفع جديد للمراجعة.',
-        type: 'receiptSubmitted',
-        relatedEntityType: 'receipt',
-        relatedEntityId: txId,
-        createdByUserId: ownerUserId,
-      );
-      await _notificationRepository.createForUser(
-        userId: ownerUserId,
-        organizationId: organizationId,
-        title: 'تم إرسال الإيصال للمراجعة',
-        body: 'إيصالك قيد مراجعة مسؤول المالية.',
-        type: 'receiptReceived',
-        relatedEntityType: 'receipt',
-        relatedEntityId: txId,
-        createdByUserId: ownerUserId,
-      );
-
-      if (paymentId.isNotEmpty) {
-        try {
-          await _firestoreService.updatePaymentStatus(
-            paymentId,
-            PaymentStatus.pending,
-            receiptUrl: upload.url,
-            transactionId: txId,
-          );
-        } catch (error, stackTrace) {
-          // The organization transaction is authoritative for review.
-          debugPrint(
-            '[Upload] legacy payment update skipped: $error\n$stackTrace',
-          );
-        }
-      }
-
+      debugPrint(
+          '[Receipts] submitted transaction=$transactionId org=$organizationId');
       state = const UploadState();
       return true;
-    } catch (e, stackTrace) {
-      debugPrint('[Upload] receipt upload failed: $e\n$stackTrace');
-      state = UploadState(error: e.toString());
+    } catch (error, stackTrace) {
+      if (uploadedReceiptPath != null) {
+        try {
+          await _financialRepository.cleanupOrphanReceipt(
+            receiptStoragePath: uploadedReceiptPath,
+          );
+        } catch (cleanupError) {
+          debugPrint('[Receipts] deferred orphan cleanup: $cleanupError');
+        }
+      }
+      debugPrint('[Receipts] upload failed: $error\n$stackTrace');
+      state = UploadState(error: error.toString());
       return false;
     }
   }
@@ -347,94 +337,62 @@ class UploadNotifier extends StateNotifier<UploadState> {
 
 final uploadProvider =
     StateNotifierProvider<UploadNotifier, UploadState>((ref) {
-  return UploadNotifier(
-    ref.watch(firestoreServiceProvider),
-    ref.watch(storageServiceProvider),
-    ref.watch(notificationRepositoryProvider),
-  );
+  return UploadNotifier(ref.watch(storageServiceProvider),
+      ref.watch(financialRepositoryProvider));
 });
 
-// ── OTP State ─────────────────────────────────────────────────────────────────
 class OtpState {
+  const OtpState(
+      {this.isLoading = false, this.codeSent = false, this.phone, this.error});
   final bool isLoading;
   final bool codeSent;
   final String? phone;
   final String? error;
 
-  const OtpState({
-    this.isLoading = false,
-    this.codeSent = false,
-    this.phone,
-    this.error,
-  });
-
-  OtpState copyWith({
-    bool? isLoading,
-    bool? codeSent,
-    String? phone,
-    String? error,
-  }) {
-    return OtpState(
-      isLoading: isLoading ?? this.isLoading,
-      codeSent: codeSent ?? this.codeSent,
-      phone: phone ?? this.phone,
-      error: error,
-    );
-  }
+  OtpState copyWith(
+          {bool? isLoading, bool? codeSent, String? phone, String? error}) =>
+      OtpState(
+        isLoading: isLoading ?? this.isLoading,
+        codeSent: codeSent ?? this.codeSent,
+        phone: phone ?? this.phone,
+        error: error,
+      );
 }
 
 class OtpNotifier extends StateNotifier<OtpState> {
   OtpNotifier(this._authService) : super(const OtpState());
-
   final AuthService _authService;
 
   Future<void> sendOtp(String phone) async {
-    state = OtpState(
-      isLoading: false,
-      codeSent: true,
-      phone: phone,
-    );
+    state = OtpState(codeSent: true, phone: phone);
   }
 
   Future<MemberModel?> verifyOtp(String password) async {
     state = state.copyWith(isLoading: true);
+    final phone = state.phone;
+    if (phone == null || phone.isEmpty) {
+      state = state.copyWith(
+          isLoading: false, error: 'انتهت الجلسة. أعد إدخال رقم الهاتف.');
+      return null;
+    }
     try {
-      final phone = state.phone;
-
-      if (phone == null || phone.isEmpty) {
-        state = state.copyWith(
-          isLoading: false,
-          error:
-              'انتهت الجلسة. يرجى إعادة إدخال رقم الهاتف والمحاولة مرة أخرى.',
-        );
-        return null;
-      }
-
       final member = await _authService.signInWithPhoneAndPassword(
-        phone: phone,
-        password: password,
-      );
-
+          phone: phone, password: password);
       if (member == null) {
         state = state.copyWith(
-          isLoading: false,
-          error: 'رقم الهاتف أو كلمة المرور غير صحيحة. يرجى المحاولة مجددًا.',
-        );
+            isLoading: false, error: 'رقم الهاتف أو كلمة المرور غير صحيحة.');
         return null;
       }
-
       state = const OtpState();
       return member;
-    } catch (e) {
+    } catch (_) {
       state = state.copyWith(
-        isLoading: false,
-        error: 'تعذر تسجيل الدخول. حاول مرة أخرى.',
-      );
+          isLoading: false, error: 'تعذر تسجيل الدخول. حاول مرة أخرى.');
       return null;
     }
   }
 }
 
-final otpProvider = StateNotifierProvider<OtpNotifier, OtpState>((ref) {
-  return OtpNotifier(ref.watch(authServiceProvider));
-});
+final otpProvider = StateNotifierProvider<OtpNotifier, OtpState>(
+  (ref) => OtpNotifier(ref.watch(authServiceProvider)),
+);

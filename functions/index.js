@@ -1,5 +1,6 @@
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
+const { FieldValue } = require("firebase-admin/firestore");
 
 admin.initializeApp();
 
@@ -8,6 +9,11 @@ admin.initializeApp();
 const auditTriggers = require("./audit");
 for (const [name, handler] of Object.entries(auditTriggers)) {
   exports[name] = handler;
+}
+
+const financialFunctions = require("./financial");
+for (const [name, handler] of Object.entries(financialFunctions)) {
+  if (name !== "_test") exports[name] = handler;
 }
 
 /**
@@ -108,7 +114,7 @@ exports.onNotificationCreated = onDocumentCreated(
           .collection("users")
           .doc(userId)
           .update({
-            fcmTokens: admin.firestore.FieldValue.arrayRemove(...invalid),
+            fcmTokens: FieldValue.arrayRemove(...invalid),
           })
           .catch(() => {});
       }

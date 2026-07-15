@@ -11,6 +11,8 @@ import '../presentation/screens/member/profile_edit_screen.dart';
 import '../presentation/screens/member/receipt_upload_screen.dart';
 import '../presentation/screens/member/transaction_timeline_screen.dart';
 import '../presentation/screens/member/council_booking_screen.dart';
+import '../presentation/screens/member/guest_booking_receipt_screen.dart';
+import '../data/models/financial_models.dart';
 import '../presentation/screens/member/receipt_history_screen.dart';
 import '../presentation/screens/admin/admin_dashboard.dart';
 import '../presentation/screens/admin/admin_review_screen.dart';
@@ -18,6 +20,7 @@ import '../presentation/screens/admin/create_organization_screen.dart';
 import '../presentation/screens/admin/organizations_management_screen.dart';
 import '../presentation/screens/admin/roles_management_screen.dart';
 import '../presentation/screens/admin/financial_review_screen.dart';
+import '../presentation/screens/admin/financial_management_screen.dart';
 import '../presentation/screens/organization/organization_selector_screen.dart';
 import '../features/membership_request/presentation/join_request_screen.dart';
 import '../presentation/screens/admin/membership_requests_review_screen.dart';
@@ -162,14 +165,15 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/upload-receipt',
         name: 'uploadReceipt',
         builder: (_, state) {
-          final args = state.extra as Map<String, dynamic>;
+          final args = state.extra as ReceiptUploadArguments? ??
+              const ReceiptUploadArguments();
           return ReceiptUploadScreen(
-            paymentId: args['paymentId'] as String?,
-            periodLabel: args['periodLabel'] as String,
-            organizationId: args['organizationId'] as String?,
-            membershipId: args['membershipId'] as String?,
-            userId: args['userId'] as String?,
-            amountDeclared: (args['amountDeclared'] as num?)?.toDouble(),
+            paymentId: args.paymentId,
+            periodLabel: args.periodLabel,
+            organizationId: args.organizationId,
+            membershipId: args.membershipId,
+            userId: args.userId,
+            amountDeclaredBaisa: args.amountDeclaredBaisa,
           );
         },
       ),
@@ -186,10 +190,18 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const ReceiptHistoryScreen(),
       ),
       GoRoute(
+        path: '/booking/guest-receipt',
+        name: 'guestBookingReceipt',
+        builder: (_, state) => GuestBookingReceiptScreen(
+          arguments: state.extra! as GuestBookingReceiptArguments,
+        ),
+      ),
+      GoRoute(
         path: '/transaction/:id',
         name: 'transactionTimeline',
         builder: (_, state) => TransactionTimelineScreen(
           transactionId: state.pathParameters['id']!,
+          organizationId: state.uri.queryParameters['organizationId'],
         ),
       ),
       GoRoute(
@@ -226,6 +238,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/admin/financial-review',
         name: 'financialReview',
         builder: (_, __) => const FinancialReviewScreen(),
+      ),
+      GoRoute(
+        path: '/admin/financial-management',
+        name: 'financialManagement',
+        builder: (_, __) => const FinancialManagementScreen(),
       ),
       GoRoute(
         path: '/admin/membership-requests',

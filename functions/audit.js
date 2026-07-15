@@ -18,6 +18,7 @@
 
 const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
+const { FieldValue } = require("firebase-admin/firestore");
 
 const REGION = "us-central1";
 const db = () => admin.firestore();
@@ -79,12 +80,10 @@ async function resolveActor(actorUserId, organizationId) {
   // الدور: مشرف منصّة؟
   try {
     const paSnap = await db().collection("platform_admins").doc(actorUserId).get();
-    if (
-      paSnap.exists &&
-      paSnap.get("role") === "superAdmin" &&
-      paSnap.get("status") === "active"
-    ) {
-      actorRole = "superAdmin";
+    if (paSnap.exists && paSnap.get("status") === "active" &&
+        (paSnap.get("role") === "system_owner" ||
+         (paSnap.get("role") === "superAdmin" && paSnap.get("fullAccess") === true))) {
+      actorRole = paSnap.get("role");
     }
   } catch (err) {
     console.warn(`[audit] platform_admins lookup failed for ${actorUserId}: ${err.message}`);
@@ -142,7 +141,7 @@ async function writeAudit(eventId, entry) {
     organizationId,
     oldValue: entry.oldValue === undefined ? null : entry.oldValue,
     newValue: entry.newValue === undefined ? null : entry.newValue,
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
     source: "cloud_function",
     platform: entry.platform || null,
   };
@@ -317,8 +316,9 @@ exports.auditTransactionWrite = onDocumentWritten(
     if (transactionId === "_meta") return;
     const { before, after } = beforeAfter(event);
     const FIELDS = [
-      "status", "reviewStatus", "amountDeclared", "paymentId",
-      "reviewedBy", "rejectionReason",
+      "status", "reviewStatus", "amountDeclaredBaisa",
+      "allocationTotalBaisa", "differenceBaisa", "paymentScope",
+      "reviewedBy", "rejectionReason", "payerMembershipId",
     ];
 
     if (!before && after) {
@@ -327,7 +327,7 @@ exports.auditTransactionWrite = onDocumentWritten(
         action: "receipt.submitted",
         targetType: "transaction",
         targetId: transactionId,
-        actorUserId: firstDefined(after.uploadedByUserId, after.userId),
+        actorUserId: firstDefined(after.payerUserId, after.uploadedByUserId, after.userId),
         oldValue: null,
         newValue: pick(after, FIELDS),
         platform: after.platform || null,

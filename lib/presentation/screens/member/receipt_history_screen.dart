@@ -2,11 +2,11 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_theme.dart';
-import '../../../data/models/transaction_model.dart';
+import '../../../data/models/financial_models.dart';
 import '../../../providers/app_providers.dart';
 
 class ReceiptHistoryScreen extends ConsumerWidget {
@@ -14,100 +14,84 @@ class ReceiptHistoryScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final user = ref.watch(authStateProvider).value;
+    final organizationContext = ref.watch(organizationContextProvider);
+    final organizationId =
+        organizationContext.currentOrganization?['organizationId'] as String?;
+    final membershipId = organizationContext.currentMembership?.id;
+    final key = organizationId == null || membershipId == null
+        ? null
+        : (organizationId: organizationId, membershipId: membershipId);
     final receipts =
-        user == null ? null : ref.watch(memberTransactionsProvider(user.uid));
-    // إيصالات المجلس الحالي فقط — لا تُدمج إيصالات المجالس الأخرى للعضو.
-    final currentOrgId = ref
-        .watch(organizationContextProvider)
-        .currentOrganization?['organizationId'] as String?;
+        key == null ? null : ref.watch(payerFinancialTransactionsProvider(key));
     return Directionality(
       textDirection: ui.TextDirection.rtl,
       child: Scaffold(
         backgroundColor: AppColors.background,
         appBar: AppBar(
-          title: const Text('سجل الإيصالات'),
-          backgroundColor: AppColors.primaryDark,
-          foregroundColor: Colors.white,
-        ),
+            title: const Text('سجل المعاملات'),
+            backgroundColor: AppColors.primaryDark,
+            foregroundColor: Colors.white),
         body: receipts == null
-            ? const Center(child: Text('تعذر تحميل الحساب'))
+            ? const Center(child: Text('افتح المجلس لعرض سجل معاملاته.'))
             : receipts.when(
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (_, __) => Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text('تعذر تحميل سجل الإيصالات'),
-                      OutlinedButton(
-                        onPressed: () => ref.invalidate(
-                          memberTransactionsProvider(user!.uid),
-                        ),
-                        child: const Text('إعادة المحاولة'),
-                      ),
-                    ],
+                  child: OutlinedButton.icon(
+                    onPressed: () => ref
+                        .invalidate(payerFinancialTransactionsProvider(key!)),
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('تعذر التحميل - إعادة المحاولة'),
                   ),
                 ),
-                data: (items) {
-                  if (currentOrgId == null) {
-                    return const Center(
-                      child: Text('افتح المجلس لعرض إيصالاته'),
-                    );
-                  }
-                  // تصفية على المجلس الحالي + إزالة التكرار (قد يُطابق
-                  // collectionGroup نسخة المجلس والنسخة الجذرية بنفس المعرّف).
-                  final seen = <String>{};
-                  final scoped = <TransactionModel>[];
-                  for (final receipt in items) {
-                    if (receipt.organizationId != currentOrgId) continue;
-                    if (seen.add(receipt.id)) scoped.add(receipt);
-                  }
-                  return scoped.isEmpty
-                      ? const Center(
-                          child: Text('لا توجد إيصالات في هذا المجلس'),
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.all(16),
-                          itemCount: scoped.length,
-                          itemBuilder: (_, index) =>
-                              _ReceiptHistoryCard(receipt: scoped[index]),
-                        );
-                },
+                data: (items) => items.isEmpty
+                    ? const Center(
+                        child: Text('لا توجد معاملات في هذا المجلس.'))
+                    : ListView.builder(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: items.length,
+                        itemBuilder: (context, index) {
+                          final receipt = items[index];
+                          final color = switch (receipt.reviewStatus) {
+                            'approved' => Colors.green,
+                            'rejected' => Colors.red,
+                            _ => Colors.orange,
+                          };
+                          final label = switch (receipt.reviewStatus) {
+                            'approved' => 'معتمد',
+                            'rejected' => 'مرفوض',
+                            _ => 'قيد المراجعة',
+                          };
+                          final beneficiaries = receipt.allocations
+                              .map((item) => item.beneficiaryName)
+                              .toSet()
+                              .join('، ');
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            child: ListTile(
+                              leading: CircleAvatar(
+                                  backgroundColor: color.withValues(alpha: .12),
+                                  child:
+                                      Icon(Icons.receipt_long, color: color)),
+                              title: Text(
+                                  formatBaisa(receipt.amountDeclaredBaisa),
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.bold)),
+                              subtitle: Text(
+                                  '${DateFormat('yyyy/MM/dd - HH:mm').format(receipt.submittedAt)}\n$label${beneficiaries.isEmpty ? '' : '\nعن: $beneficiaries'}'),
+                              isThreeLine: beneficiaries.isNotEmpty,
+                              trailing: const Icon(Icons.chevron_left),
+                              onTap: () => context.pushNamed(
+                                'transactionTimeline',
+                                pathParameters: {'id': receipt.id},
+                                queryParameters: {
+                                  'organizationId': organizationId
+                                },
+                              ),
+                            ),
+                          );
+                        },
+                      ),
               ),
-      ),
-    );
-  }
-}
-
-class _ReceiptHistoryCard extends StatelessWidget {
-  const _ReceiptHistoryCard({required this.receipt});
-
-  final TransactionModel receipt;
-
-  @override
-  Widget build(BuildContext context) {
-    final status = switch (receipt.reviewStatus) {
-      'approved' => ('معتمد', Colors.green),
-      'rejected' => ('مرفوض', Colors.red),
-      _ => ('قيد المراجعة', Colors.orange),
-    };
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      child: ListTile(
-        leading: Icon(Icons.receipt_long, color: status.$2),
-        title: Text(receipt.paymentPeriod ?? 'إيصال دفع'),
-        subtitle: Text(
-          '${DateFormat('yyyy/MM/dd').format(receipt.submittedAt)}\n${status.$1}'
-          '${receipt.rejectionReason?.isNotEmpty == true ? '\n${receipt.rejectionReason}' : ''}',
-        ),
-        isThreeLine: true,
-        trailing: IconButton(
-          icon: const Icon(Icons.open_in_new),
-          onPressed: () async {
-            final uri = Uri.tryParse(receipt.receiptUrl);
-            if (uri != null) await launchUrl(uri);
-          },
-        ),
       ),
     );
   }

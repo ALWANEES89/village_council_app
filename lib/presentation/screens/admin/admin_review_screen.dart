@@ -41,7 +41,7 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
     try {
       await ref.read(financialReceiptRepositoryProvider).approve(
             transactionId: tx.id,
-            organizationId: tx.organizationId ?? '',
+            organizationId: tx.organizationId,
             reviewedBy: user.uid,
           );
     } catch (_) {
@@ -76,7 +76,7 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
     try {
       await ref.read(financialReceiptRepositoryProvider).reject(
             transactionId: tx.id,
-            organizationId: tx.organizationId ?? '',
+            organizationId: tx.organizationId,
             reviewedBy: user.uid,
             rejectionReason: reason,
           );

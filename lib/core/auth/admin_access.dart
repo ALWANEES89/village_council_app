@@ -95,7 +95,10 @@ class AdminAccess {
       has('members.read');
 
   bool get canChangeRoles =>
-      isPlatformOwner || isOrgOwner || has('roles.manage') || has('changeRoles');
+      isPlatformOwner ||
+      isOrgOwner ||
+      has('roles.manage') ||
+      has('changeRoles');
 
   bool get canManageRoles => canChangeRoles;
 
@@ -117,6 +120,13 @@ class AdminAccess {
       has('manageReceipts') ||
       has('payments.approve') ||
       has('payments.reject');
+
+  bool get canManageFinance =>
+      isPlatformOwner ||
+      isOrgOwner ||
+      has('fullAccess') ||
+      has('payments.manage') ||
+      has('receipts.review');
 
   bool get canReadAudit =>
       isPlatformOwner ||

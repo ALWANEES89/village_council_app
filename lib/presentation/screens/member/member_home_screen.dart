@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import '../../../core/auth/role_labels.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/member_model.dart';
+import '../../../data/models/financial_models.dart';
 import '../../../data/models/membership_model.dart';
 import '../../../data/models/payment_model.dart';
 import '../../../data/models/user_profile_model.dart';
@@ -140,14 +141,16 @@ class _MemberHomeScreenState extends ConsumerState<MemberHomeScreen> {
     if (await _selectMembership(membership) && mounted) {
       context.pushNamed(
         'uploadReceipt',
-        extra: {
-          'organizationId': membership.organizationId,
-          'membershipId': membership.id,
-          'userId': membership.userId,
-          'paymentId': payment?.id,
-          'periodLabel': payment?.periodLabel ?? 'إيصال دفع عام',
-          'amountDeclared': payment?.amount,
-        },
+        extra: ReceiptUploadArguments(
+          organizationId: membership.organizationId,
+          membershipId: membership.id,
+          userId: membership.userId,
+          paymentId: payment?.id,
+          periodLabel: payment?.periodLabel ?? 'إيصال دفع عام',
+          amountDeclaredBaisa: payment == null
+              ? null
+              : baisaFrom(null, legacyRialValue: payment.amount),
+        ),
       );
     }
   }

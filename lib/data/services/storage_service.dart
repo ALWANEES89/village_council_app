@@ -47,7 +47,19 @@ class StorageService {
     );
     debugPrint('[Receipts] upload path=${ref.fullPath}');
 
-    final task = ref.putFile(file, SettableMetadata(contentType: fileType));
+    final task = ref.putFile(
+      file,
+      SettableMetadata(
+        contentType: fileType,
+        customMetadata: {
+          'temporaryUpload': 'true',
+          'receiptId': receiptId,
+          'uploaderUid': memberId,
+          'organizationId': organizationId,
+          'uploadedAt': DateTime.now().toUtc().toIso8601String(),
+        },
+      ),
+    );
 
     task.snapshotEvents.listen((snapshot) {
       final progress = snapshot.bytesTransferred / snapshot.totalBytes;
