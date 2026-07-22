@@ -50,6 +50,19 @@ ReceiptDraftValidation validateReceiptDraft({
       allocationTotalBaisa: total, errors: List.unmodifiable(errors.toSet()));
 }
 
+int suggestedAllocationAmount({
+  required int balanceBaisa,
+  required int alreadyAllocatedBaisa,
+  int? declaredBaisa,
+}) {
+  if (balanceBaisa <= 0 || alreadyAllocatedBaisa < 0) {
+    throw ArgumentError('Balances and allocations must be valid.');
+  }
+  final remaining = (declaredBaisa ?? 0) - alreadyAllocatedBaisa;
+  if (remaining > 0 && remaining <= balanceBaisa) return remaining;
+  return balanceBaisa;
+}
+
 PaymentScope derivePaymentScope({
   required String payerMembershipId,
   required Iterable<ReceiptAllocation> allocations,

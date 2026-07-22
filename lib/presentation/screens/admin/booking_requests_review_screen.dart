@@ -36,8 +36,8 @@ class _BookingRequestsReviewScreenState
           const SnackBar(content: Text('تم اعتماد الحجز')),
         );
       }
-    } catch (error, stackTrace) {
-      debugPrint('[BookingReview] approve failed: $error\n$stackTrace');
+    } catch (error) {
+      debugPrint('[BookingReview] approve failed type=${error.runtimeType}');
       if (mounted) _showError();
     } finally {
       if (mounted) setState(() => _processingId = null);
@@ -69,8 +69,8 @@ class _BookingRequestsReviewScreenState
           const SnackBar(content: Text('تم رفض الحجز')),
         );
       }
-    } catch (error, stackTrace) {
-      debugPrint('[BookingReview] reject failed: $error\n$stackTrace');
+    } catch (error) {
+      debugPrint('[BookingReview] reject failed type=${error.runtimeType}');
       if (mounted) _showError();
     } finally {
       if (mounted) setState(() => _processingId = null);
@@ -102,7 +102,8 @@ class _BookingRequestsReviewScreenState
         ));
       }
     } catch (error) {
-      debugPrint('[BookingReview] cancellation failed: $error');
+      debugPrint(
+          '[BookingReview] cancellation failed type=${error.runtimeType}');
       if (mounted) _showError();
     } finally {
       if (mounted) setState(() => _processingId = null);

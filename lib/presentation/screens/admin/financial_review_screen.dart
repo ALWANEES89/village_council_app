@@ -1,15 +1,19 @@
+import 'dart:async';
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_theme.dart';
-import '../../../data/models/financial_models.dart';
 import '../../../data/models/transaction_model.dart';
+import '../../../data/repositories/financial_repository.dart';
 import '../../../providers/app_providers.dart';
 import '../../widgets/reason_input_dialog.dart';
+import '../../widgets/omr_amount.dart';
 
 class FinancialReviewScreen extends ConsumerStatefulWidget {
   const FinancialReviewScreen({super.key});
@@ -20,6 +24,25 @@ class FinancialReviewScreen extends ConsumerStatefulWidget {
 
 class _FinancialReviewScreenState extends ConsumerState<FinancialReviewScreen> {
   final Set<String> _processing = {};
+  final Set<String> _opening = {};
+  final Set<String> _temporaryReceiptPaths = {};
+
+  @override
+  void dispose() {
+    unawaited(_deleteTemporaryReceipts());
+    super.dispose();
+  }
+
+  Future<void> _deleteTemporaryReceipts() async {
+    for (final path in _temporaryReceiptPaths) {
+      try {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      } catch (_) {
+        // The external viewer may still hold the file; the OS cache can remove it later.
+      }
+    }
+  }
 
   Future<void> _approve(TransactionModel receipt) async {
     if (!receipt.amountsMatch || _processing.contains(receipt.id)) return;
@@ -32,8 +55,8 @@ class _FinancialReviewScreenState extends ConsumerState<FinancialReviewScreen> {
           );
       _message('تم اعتماد الإيصال وتوزيع المبلغ على الرسوم.');
     } catch (error) {
-      _message('تعذر الاعتماد. قد يكون رصيد أحد الرسوم قد تغير: $error',
-          error: true);
+      debugPrint('[Receipts] approve failed type=${error.runtimeType}');
+      _message('تعذر الاعتماد. قد يكون رصيد أحد الرسوم قد تغير.', error: true);
     } finally {
       if (mounted) setState(() => _processing.remove(receipt.id));
     }
@@ -59,27 +82,55 @@ class _FinancialReviewScreenState extends ConsumerState<FinancialReviewScreen> {
           );
       _message('تم رفض الإيصال دون خصم أي مبلغ.');
     } catch (error) {
-      _message('تعذر رفض الإيصال: $error', error: true);
+      debugPrint('[Receipts] reject failed type=${error.runtimeType}');
+      _message('تعذر رفض الإيصال. حاول مجددًا.', error: true);
     } finally {
       if (mounted) setState(() => _processing.remove(receipt.id));
     }
   }
 
   Future<void> _openReceipt(TransactionModel receipt) async {
+    if (_opening.contains(receipt.id)) return;
+    setState(() => _opening.add(receipt.id));
     try {
-      final url = await ref
-          .read(financialRepositoryProvider)
-          .getFinancialReceiptDownloadUrl(
-            organizationId: receipt.organizationId,
-            transactionId: receipt.id,
+      final access =
+          await ref.read(financialRepositoryProvider).getFinancialReceiptAccess(
+                organizationId: receipt.organizationId,
+                transactionId: receipt.id,
+              );
+      switch (access) {
+        case FinancialReceiptUrlAccess(:final url):
+          if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+            throw StateError('تعذر فتح رابط الإيصال.');
+          }
+        case FinancialReceiptBytesAccess(
+            :final fileName,
+            :final contentType,
+            :final bytes,
+          ):
+          final directory = Directory(
+            '${Directory.systemTemp.path}${Platform.pathSeparator}financial_receipts',
           );
-      final uri = Uri.tryParse(url);
-      if (uri == null ||
-          !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
-        throw StateError('تعذر فتح رابط الإيصال.');
+          await directory.create(recursive: true);
+          final safeTransactionId = receipt.id.replaceAll(
+            RegExp(r'[^A-Za-z0-9_-]'),
+            '_',
+          );
+          final file = File(
+            '${directory.path}${Platform.pathSeparator}${safeTransactionId}_$fileName',
+          );
+          await file.writeAsBytes(bytes, flush: true);
+          _temporaryReceiptPaths.add(file.path);
+          final result = await OpenFilex.open(file.path, type: contentType);
+          if (result.type != ResultType.done) {
+            throw StateError(result.message);
+          }
       }
     } catch (error) {
-      _message('تعذر فتح الإيصال: $error', error: true);
+      debugPrint('[Receipts] secure open failed type=${error.runtimeType}');
+      _message('تعذر فتح الإيصال. تحقق من الصلاحية والملف.', error: true);
+    } finally {
+      if (mounted) setState(() => _opening.remove(receipt.id));
     }
   }
 
@@ -117,7 +168,7 @@ class _FinancialReviewScreenState extends ConsumerState<FinancialReviewScreen> {
                       onPressed: () => ref.invalidate(
                           pendingFinancialReceiptsProvider(organizationId)),
                       icon: const Icon(Icons.refresh),
-                      label: Text('تعذر تحميل الإيصالات: $error'),
+                      label: const Text('تعذر تحميل الإيصالات. أعد المحاولة.'),
                     ),
                   ),
                   data: (items) => items.isEmpty
@@ -131,6 +182,7 @@ class _FinancialReviewScreenState extends ConsumerState<FinancialReviewScreen> {
                             return _ReceiptReviewCard(
                               receipt: receipt,
                               processing: _processing.contains(receipt.id),
+                              opening: _opening.contains(receipt.id),
                               onApprove: () => _approve(receipt),
                               onReject: () => _reject(receipt),
                               onOpen: () => _openReceipt(receipt),
@@ -147,11 +199,13 @@ class _ReceiptReviewCard extends StatelessWidget {
   const _ReceiptReviewCard(
       {required this.receipt,
       required this.processing,
+      required this.opening,
       required this.onApprove,
       required this.onReject,
       required this.onOpen});
   final TransactionModel receipt;
   final bool processing;
+  final bool opening;
   final VoidCallback onApprove;
   final VoidCallback onReject;
   final VoidCallback onOpen;
@@ -186,11 +240,18 @@ class _ReceiptReviewCard extends StatelessWidget {
           ]),
           const Divider(height: 26),
           const Text('المبلغ الذي أدخله الدافع'),
-          Text(formatBaisa(receipt.amountDeclaredBaisa),
-              style:
-                  const TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
-          Text('إجمالي التوزيع: ${formatBaisa(receipt.allocationTotalBaisa)}'),
-          Text('الفرق: ${formatBaisa(receipt.differenceBaisa)}'),
+          OmrAmount(
+            amountBaisa: receipt.amountDeclaredBaisa,
+            style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+          ),
+          LabeledOmrAmount(
+            label: 'إجمالي التوزيع:',
+            amountBaisa: receipt.allocationTotalBaisa,
+          ),
+          LabeledOmrAmount(
+            label: 'الفرق:',
+            amountBaisa: receipt.differenceBaisa,
+          ),
           const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.all(10),
@@ -222,14 +283,29 @@ class _ReceiptReviewCard extends StatelessWidget {
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.person_outline),
               title: Text(allocation.beneficiaryName),
-              subtitle: Text(
-                  '${allocation.chargeTitle}\nالرصيد عند الإرسال: ${formatBaisa(allocation.balanceBeforeBaisa)}'),
-              trailing: Text(formatBaisa(allocation.amountAllocatedBaisa),
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(allocation.chargeTitle),
+                  LabeledOmrAmount(
+                    label: 'الرصيد عند الإرسال:',
+                    amountBaisa: allocation.balanceBeforeBaisa,
+                  ),
+                ],
+              ),
+              trailing: OmrAmount(
+                amountBaisa: allocation.amountAllocatedBaisa,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
           OutlinedButton.icon(
-            onPressed: onOpen,
-            icon: const Icon(Icons.open_in_new),
+            onPressed: opening ? null : onOpen,
+            icon: opening
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.open_in_new),
             label: Text(receipt.fileType == 'application/pdf'
                 ? 'فتح ملف PDF'
                 : 'عرض صورة الإيصال'),

@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../core/formatters/omr_currency.dart';
+
 enum FinancialFeeMode {
   free,
   subscription,
@@ -32,7 +34,6 @@ class ReceiptUploadArguments {
     this.organizationId,
     this.membershipId,
     this.userId,
-    this.amountDeclaredBaisa,
   });
 
   final String? paymentId;
@@ -40,7 +41,6 @@ class ReceiptUploadArguments {
   final String? organizationId;
   final String? membershipId;
   final String? userId;
-  final int? amountDeclaredBaisa;
 }
 
 int baisaFrom(dynamic value, {dynamic legacyRialValue}) {
@@ -58,27 +58,11 @@ DateTime? financialDate(dynamic value) {
 }
 
 String formatBaisa(int value) {
-  final sign = value < 0 ? '-' : '';
-  final absolute = value.abs();
-  return '$sign${absolute ~/ 1000}.${(absolute % 1000).toString().padLeft(3, '0')} ر.ع';
+  return formatOmaniRialForSystemNotification(value);
 }
 
 int? parseOmaniRialsToBaisa(String input) {
-  const arabicDigits = '٠١٢٣٤٥٦٧٨٩';
-  var normalized = input.trim().replaceAll(',', '.').replaceAll('٫', '.');
-  for (var index = 0; index < arabicDigits.length; index += 1) {
-    normalized = normalized.replaceAll(arabicDigits[index], '$index');
-  }
-  if (!RegExp(r'^\d+(?:\.\d{1,3})?$').hasMatch(normalized)) return null;
-  final parts = normalized.split('.');
-  final rials = int.tryParse(parts.first);
-  if (rials == null) return null;
-  final fraction = parts.length == 1 ? '' : parts[1];
-  return rials * 1000 + int.parse(fraction.padRight(3, '0').ifEmpty('0'));
-}
-
-extension on String {
-  String ifEmpty(String fallback) => isEmpty ? fallback : this;
+  return parseOmaniRialInput(input);
 }
 
 class FinancialSettings {
@@ -280,6 +264,8 @@ class FinancialCharge {
     this.dueDate,
     this.lastTransactionId,
     this.lastPayerName,
+    this.hasPendingReceipt = false,
+    this.pendingTransactionId,
   });
 
   final String id;
@@ -299,8 +285,11 @@ class FinancialCharge {
   final ChargeStatus status;
   final String? lastTransactionId;
   final String? lastPayerName;
+  final bool hasPendingReceipt;
+  final String? pendingTransactionId;
 
   bool get isPayable =>
+      !hasPendingReceipt &&
       balanceBaisa > 0 &&
       const {
         ChargeStatus.unpaid,
@@ -353,6 +342,8 @@ class FinancialCharge {
       lastTransactionId: data['lastTransactionId'] as String? ??
           data['transactionId'] as String?,
       lastPayerName: data['lastPayerName'] as String?,
+      hasPendingReceipt: data['hasPendingReceipt'] == true,
+      pendingTransactionId: data['pendingTransactionId'] as String?,
     );
   }
 }

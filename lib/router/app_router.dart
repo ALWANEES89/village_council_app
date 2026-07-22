@@ -173,7 +173,6 @@ final routerProvider = Provider<GoRouter>((ref) {
             organizationId: args.organizationId,
             membershipId: args.membershipId,
             userId: args.userId,
-            amountDeclaredBaisa: args.amountDeclaredBaisa,
           );
         },
       ),

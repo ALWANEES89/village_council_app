@@ -1,6 +1,7 @@
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
 const { FieldValue } = require("firebase-admin/firestore");
+const { renderStructuredNotificationBody } = require("./omr_currency");
 
 admin.initializeApp();
 
@@ -68,13 +69,18 @@ exports.onNotificationCreated = onDocumentCreated(
       tokens: tokenList,
       notification: {
         title: notification.title || "إشعار جديد",
-        body: notification.body || "",
+        body: renderStructuredNotificationBody(notification),
       },
       data: {
         type: String(notification.type || ""),
         relatedEntityType: String(notification.relatedEntityType || ""),
         relatedEntityId: String(notification.relatedEntityId || ""),
         organizationId: String(notification.organizationId || ""),
+        amountBaisa: Number.isSafeInteger(notification.amountBaisa)
+          ? String(notification.amountBaisa)
+          : "",
+        currencyCode: String(notification.currencyCode || ""),
+        bodyTemplate: String(notification.bodyTemplate || ""),
       },
       android: {
         priority: "high",

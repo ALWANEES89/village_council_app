@@ -1,7 +1,25 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- The INTERNET permission is required for development. Specifically,
          the Flutter tool needs it to communicate with the running application
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <application>
+        <!-- Dart initializes Firebase explicitly so Emulator QA can use a demo
+             projectId without inheriting the production Android resources. -->
+        <provider
+            android:name="com.google.firebase.provider.FirebaseInitProvider"
+            tools:node="remove" />
+        <!-- Debug-only, deterministic QA hook. It is absent from profile and
+             release manifests and accepts only the four approved fake amounts. -->
+        <receiver
+            android:name=".QaLocalNotificationReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.alrahmat.village_council.QA_OMR_NOTIFICATION" />
+            </intent-filter>
+        </receiver>
+    </application>
 </manifest>

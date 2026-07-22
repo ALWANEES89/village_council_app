@@ -4,6 +4,27 @@ import 'package:cloud_functions/cloud_functions.dart';
 import '../models/booking_model.dart';
 import 'notification_repository.dart';
 
+List<BookingModel> parseBookingAvailability(
+  Map<String, dynamic> data, {
+  required String organizationId,
+}) {
+  return (data['days'] as List? ?? const []).map((item) {
+    final day = Map<String, dynamic>.from(item as Map);
+    return BookingModel(
+      bookingId: '',
+      organizationId: organizationId,
+      userId: '',
+      membershipId: '',
+      requesterName: '',
+      requesterPhone: '',
+      bookingDate: DateTime.parse(day['date'] as String).toLocal(),
+      occasionType: '',
+      notes: '',
+      status: day['status'] as String? ?? 'pending',
+    );
+  }).toList();
+}
+
 class BookingRepository {
   BookingRepository({
     FirebaseFirestore? firestore,
@@ -48,21 +69,7 @@ class BookingRepository {
       'month': month.month,
     });
     final data = Map<String, dynamic>.from(result.data as Map);
-    return (data['days'] as List? ?? const []).map((item) {
-      final day = Map<String, dynamic>.from(item as Map);
-      return BookingModel(
-        bookingId: '',
-        organizationId: organizationId,
-        userId: '',
-        membershipId: '',
-        requesterName: '',
-        requesterPhone: '',
-        bookingDate: DateTime.parse(day['date'] as String).toLocal(),
-        occasionType: '',
-        notes: '',
-        status: day['status'] as String? ?? 'pending',
-      );
-    }).toList();
+    return parseBookingAvailability(data, organizationId: organizationId);
   }
 
   Future<Map<String, dynamic>?> getGuestBookingCharge({
@@ -86,7 +93,6 @@ class BookingRepository {
     required String receiptId,
     required int amountDeclaredBaisa,
     required int balanceBeforeBaisa,
-    required String receiptUrl,
     required String receiptStoragePath,
     required String fileName,
     required String fileType,
@@ -99,7 +105,6 @@ class BookingRepository {
       'receiptId': receiptId,
       'amountDeclaredBaisa': amountDeclaredBaisa,
       'balanceBeforeBaisa': balanceBeforeBaisa,
-      'receiptUrl': receiptUrl,
       'receiptStoragePath': receiptStoragePath,
       'fileName': fileName,
       'fileType': fileType,

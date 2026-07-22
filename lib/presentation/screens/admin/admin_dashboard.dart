@@ -8,6 +8,7 @@ import '../../../data/models/transaction_model.dart';
 import '../../../data/models/organization_model.dart';
 import '../../../providers/app_providers.dart';
 import '../../widgets/notification_bell.dart';
+import '../../widgets/omr_amount.dart';
 
 class AdminDashboard extends ConsumerWidget {
   const AdminDashboard({super.key});
@@ -36,8 +37,6 @@ class AdminDashboard extends ConsumerWidget {
         body: const Center(child: Text('لا تملك صلاحية دخول لوحة التحكم')),
       );
     }
-    final pendingAsync = ref.watch(pendingTransactionsProvider);
-    final statsAsync = ref.watch(adminStatsProvider);
     final currentOrganization =
         ref.watch(organizationContextProvider).currentOrganization;
     final organizationContext = ref.watch(organizationContextProvider);
@@ -97,8 +96,11 @@ class AdminDashboard extends ConsumerWidget {
                 IconButton(
                   icon: const Icon(Icons.refresh, color: Colors.white),
                   onPressed: () {
-                    ref.invalidate(pendingTransactionsProvider);
-                    ref.invalidate(adminStatsProvider);
+                    if (organizationId != null) {
+                      ref.invalidate(
+                        pendingFinancialReceiptsProvider(organizationId),
+                      );
+                    }
                   },
                 ),
               ],
@@ -138,12 +140,6 @@ class AdminDashboard extends ConsumerWidget {
                       ),
                     ],
                     const SizedBox(height: 14),
-                    statsAsync.when(
-                      loading: () => const _StatsShimmer(),
-                      error: (_, __) => const Text('تعذر تحميل الإحصائيات'),
-                      data: (stats) => _StatsCards(stats: stats),
-                    ),
-                    const SizedBox(height: 24),
                     if (access?.canReviewRequests == true)
                       Card(
                         margin: EdgeInsets.zero,
@@ -327,46 +323,6 @@ class AdminDashboard extends ConsumerWidget {
                       ),
                     ],
                     const SizedBox(height: 24),
-                    Row(
-                      children: [
-                        const Text('طلبات قيد المراجعة',
-                            style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: AppColors.textDark)),
-                        const SizedBox(width: 10),
-                        pendingAsync.when(
-                          data: (list) => Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: Colors.orange,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Text('${list.length}',
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold)),
-                          ),
-                          loading: () => const SizedBox(),
-                          error: (_, __) => const SizedBox(),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    pendingAsync.when(
-                      loading: () => const Center(
-                          child: CircularProgressIndicator(
-                              color: AppColors.primary)),
-                      error: (_, __) => const Text('تعذر تحميل الإيصالات'),
-                      data: (txs) => txs.isEmpty
-                          ? _EmptyPending()
-                          : Column(
-                              children: txs
-                                  .map((tx) => _PendingCard(tx: tx))
-                                  .toList(),
-                            ),
-                    ),
                   ],
                 ),
               ),
@@ -399,8 +355,7 @@ class _StatsCards extends StatelessWidget {
             Expanded(
               child: _StatCard(
                 label: 'المبالغ المحصلة',
-                value:
-                    '${(stats['totalCollected'] as double).toStringAsFixed(0)} ر.ع',
+                amountBaisa: stats['totalCollectedBaisa'] as int? ?? 0,
                 icon: Icons.monetization_on,
                 color: Colors.green,
               ),
@@ -431,18 +386,20 @@ class _StatsCards extends StatelessWidget {
 
 class _StatCard extends StatelessWidget {
   final String label;
-  final String value;
+  final String? value;
+  final int? amountBaisa;
   final IconData icon;
   final Color color;
   final bool fullWidth;
 
   const _StatCard({
     required this.label,
-    required this.value,
+    this.value,
+    this.amountBaisa,
     required this.icon,
     required this.color,
     this.fullWidth = false,
-  });
+  }) : assert(value != null || amountBaisa != null);
 
   @override
   Widget build(BuildContext context) {
@@ -479,11 +436,21 @@ class _StatCard extends StatelessWidget {
                     style:
                         TextStyle(color: Colors.grey.shade600, fontSize: 12)),
                 const SizedBox(height: 4),
-                Text(value,
+                if (amountBaisa != null)
+                  OmrAmount(
+                    amountBaisa: amountBaisa!,
                     style: TextStyle(
-                        color: color,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16)),
+                      color: color,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  )
+                else
+                  Text(value!,
+                      style: TextStyle(
+                          color: color,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16)),
               ],
             ),
           ),

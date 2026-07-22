@@ -52,7 +52,7 @@ void main() {
       expect(parseOmaniRialsToBaisa('٥'), 5000);
       expect(parseOmaniRialsToBaisa('١٢٫٥٠٠'), 12500);
       expect(parseOmaniRialsToBaisa('١٫٢٣٤٥'), isNull);
-      expect(formatBaisa(12500), '12.500 ر.ع');
+      expect(formatBaisa(12500), '12.500 ر.ع.');
       expect(baisaFrom(null, legacyRialValue: 12.5), 12500);
     });
   });
@@ -203,6 +203,23 @@ void main() {
           statusAfterApprovedAllocation(
               balanceBeforeBaisa: 1000, allocationBaisa: 1000),
           ChargeStatus.paid);
+    });
+    test('entered amount becomes a partial allocation for one charge', () {
+      expect(
+        suggestedAllocationAmount(
+          balanceBaisa: 12500,
+          alreadyAllocatedBaisa: 0,
+          declaredBaisa: 5000,
+        ),
+        5000,
+      );
+      expect(
+        suggestedAllocationAmount(
+          balanceBaisa: 12500,
+          alreadyAllocatedBaisa: 0,
+        ),
+        12500,
+      );
     });
     test('amount mismatch blocks submission', () {
       final result =

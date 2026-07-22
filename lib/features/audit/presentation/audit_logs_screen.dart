@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../providers/app_providers.dart';
+import '../../../presentation/widgets/omr_amount.dart';
 import '../data/audit_log_model.dart';
 import '../data/audit_log_repository.dart';
 import '../providers/audit_providers.dart';
@@ -105,15 +106,16 @@ class _AuditLogsScreenState extends ConsumerState<AuditLogsScreen> {
     if (options.isEmpty) {
       return const _Message('لا توجد مجالس متاحة لعرض سجلها');
     }
-    final selectedId =
-        options.any((option) => option.id == _organizationId)
-            ? _organizationId!
-            : options.first.id;
+    final selectedId = options.any((option) => option.id == _organizationId)
+        ? _organizationId!
+        : options.first.id;
 
     final query = AuditLogQuery(
       organizationId: selectedId,
       from: _from,
-      to: _to == null ? null : DateTime(_to!.year, _to!.month, _to!.day, 23, 59, 59),
+      to: _to == null
+          ? null
+          : DateTime(_to!.year, _to!.month, _to!.day, 23, 59, 59),
     );
     final logsAsync = ref.watch(auditLogsProvider(query));
 
@@ -155,8 +157,8 @@ class _AuditLogsScreenState extends ConsumerState<AuditLogsScreen> {
 
   Widget _buildList(List<AuditLogEntry> allEntries) {
     final actions = _distinct(allEntries.map((entry) => entry.action));
-    final roles =
-        _distinct(allEntries.map((entry) => entry.actorRole).whereType<String>());
+    final roles = _distinct(
+        allEntries.map((entry) => entry.actorRole).whereType<String>());
     final targetTypes = _distinct(
         allEntries.map((entry) => entry.targetType).whereType<String>());
 
@@ -260,7 +262,10 @@ class _AuditLogsScreenState extends ConsumerState<AuditLogsScreen> {
   }
 
   static List<String> _distinct(Iterable<String> values) {
-    final set = values.where((value) => value.trim().isNotEmpty).toSet().toList()
+    final set = values
+        .where((value) => value.trim().isNotEmpty)
+        .toSet()
+        .toList()
       ..sort();
     return set;
   }
@@ -452,14 +457,16 @@ class _AuditCard extends StatelessWidget {
           children: [
             const SizedBox(height: 2),
             Text('$actor — ${roleLabel(entry.actorRole ?? 'unknown')}'),
-            Text(date, style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+            Text(date,
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
           ],
         ),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
         children: [
           _kv('نوع الهدف', targetTypeLabel(entry.targetType ?? '—')),
           if (entry.targetId != null) _kv('معرّف الهدف', entry.targetId!),
-          if (entry.actorUserId != null) _kv('معرّف الفاعل', entry.actorUserId!),
+          if (entry.actorUserId != null)
+            _kv('معرّف الفاعل', entry.actorUserId!),
           _kv('المصدر', entry.source ?? '—'),
           if (entry.platform != null) _kv('المنصّة', entry.platform!),
           const Divider(),
@@ -518,9 +525,12 @@ class _ValueBlock extends StatelessWidget {
     );
   }
 
-  Widget _renderValue(Object? value) {
+  Widget _renderValue(Object? value, {String? fieldName}) {
     if (value == null) {
       return Text('—', style: TextStyle(color: Colors.grey.shade500));
+    }
+    if (_isBaisaField(fieldName) && value is num) {
+      return OmrAmount(amountBaisa: value.toInt());
     }
     if (value is Map) {
       return Column(
@@ -532,10 +542,13 @@ class _ValueBlock extends StatelessWidget {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('${entry.key}: ',
+                    Text('${_auditFieldLabel(entry.key.toString())}: ',
                         style: const TextStyle(fontWeight: FontWeight.w600)),
                     Expanded(
-                      child: SelectableText(_stringify(entry.value)),
+                      child: _renderValue(
+                        entry.value,
+                        fieldName: entry.key.toString(),
+                      ),
                     ),
                   ],
                 ),
@@ -544,16 +557,48 @@ class _ValueBlock extends StatelessWidget {
             .toList(),
       );
     }
+    if (value is List) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: value
+            .map((item) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 1),
+                  child: _renderValue(item, fieldName: fieldName),
+                ))
+            .toList(),
+      );
+    }
     return SelectableText(_stringify(value));
   }
 
   String _stringify(Object? value) {
     if (value == null) return '—';
-    if (value is List) return value.map(_stringify).join('، ');
-    if (value is Map) {
-      return value.entries.map((e) => '${e.key}: ${_stringify(e.value)}').join(' | ');
-    }
     return value.toString();
+  }
+
+  bool _isBaisaField(String? fieldName) =>
+      fieldName?.toLowerCase().endsWith('baisa') == true;
+
+  String _auditFieldLabel(String fieldName) {
+    const labels = {
+      'amountBaisa': 'المبلغ',
+      'amountDueBaisa': 'المبلغ المستحق',
+      'amountPaidBaisa': 'المبلغ المدفوع',
+      'amountDeclaredBaisa': 'المبلغ المصرح',
+      'amountAllocatedBaisa': 'المبلغ الموزع',
+      'allocationTotalBaisa': 'إجمالي التوزيع',
+      'balanceBaisa': 'الرصيد',
+      'balanceBeforeBaisa': 'الرصيد السابق',
+      'balanceAfterBaisa': 'الرصيد اللاحق',
+      'memberBookingFeeBaisa': 'رسم حجز العضو',
+      'nonMemberBookingFeeBaisa': 'رسم حجز الضيف',
+      'eventBookingFeeBaisa': 'رسم المناسبة',
+    };
+    if (labels.containsKey(fieldName)) return labels[fieldName]!;
+    if (_isBaisaField(fieldName)) {
+      return fieldName.substring(0, fieldName.length - 'Baisa'.length);
+    }
+    return fieldName;
   }
 }
 
@@ -667,7 +712,9 @@ IconData _actionIcon(String? targetType) {
 }
 
 Color _actionColor(String action) {
-  if (action.contains('reject') || action.contains('deleted')) return Colors.red;
+  if (action.contains('reject') || action.contains('deleted')) {
+    return Colors.red;
+  }
   if (action.contains('approved') || action.contains('created')) {
     return Colors.green;
   }

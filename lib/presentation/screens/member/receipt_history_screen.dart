@@ -6,8 +6,8 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../../core/theme/app_theme.dart';
-import '../../../data/models/financial_models.dart';
 import '../../../providers/app_providers.dart';
+import '../../widgets/omr_amount.dart';
 
 class ReceiptHistoryScreen extends ConsumerWidget {
   const ReceiptHistoryScreen({super.key});
@@ -72,10 +72,11 @@ class ReceiptHistoryScreen extends ConsumerWidget {
                                   backgroundColor: color.withValues(alpha: .12),
                                   child:
                                       Icon(Icons.receipt_long, color: color)),
-                              title: Text(
-                                  formatBaisa(receipt.amountDeclaredBaisa),
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.bold)),
+                              title: OmrAmount(
+                                amountBaisa: receipt.amountDeclaredBaisa,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.bold),
+                              ),
                               subtitle: Text(
                                   '${DateFormat('yyyy/MM/dd - HH:mm').format(receipt.submittedAt)}\n$label${beneficiaries.isEmpty ? '' : '\nعن: $beneficiaries'}'),
                               isThreeLine: beneficiaries.isNotEmpty,

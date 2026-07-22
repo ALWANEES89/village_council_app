@@ -1,31 +1,110 @@
+import 'dart:async';
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_theme.dart';
-import '../../../data/models/financial_models.dart';
 import '../../../data/models/transaction_model.dart';
+import '../../../data/repositories/financial_repository.dart';
 import '../../../providers/app_providers.dart';
+import '../../widgets/omr_amount.dart';
 
-class TransactionTimelineScreen extends ConsumerWidget {
+class TransactionTimelineScreen extends ConsumerStatefulWidget {
   const TransactionTimelineScreen(
       {super.key, required this.transactionId, this.organizationId});
   final String transactionId;
   final String? organizationId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final orgId = organizationId ??
+  ConsumerState<TransactionTimelineScreen> createState() =>
+      _TransactionTimelineScreenState();
+}
+
+class _TransactionTimelineScreenState
+    extends ConsumerState<TransactionTimelineScreen> {
+  bool _opening = false;
+  final Set<String> _temporaryReceiptPaths = {};
+
+  @override
+  void dispose() {
+    unawaited(_deleteTemporaryReceipts());
+    super.dispose();
+  }
+
+  Future<void> _deleteTemporaryReceipts() async {
+    for (final path in _temporaryReceiptPaths) {
+      try {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      } catch (_) {
+        // External viewers may retain the cache file briefly.
+      }
+    }
+  }
+
+  Future<void> _openReceipt(TransactionModel transaction) async {
+    if (_opening) return;
+    setState(() => _opening = true);
+    try {
+      final access =
+          await ref.read(financialRepositoryProvider).getFinancialReceiptAccess(
+                organizationId: transaction.organizationId,
+                transactionId: transaction.id,
+              );
+      switch (access) {
+        case FinancialReceiptUrlAccess(:final url):
+          if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+            throw StateError('تعذر فتح رابط الإيصال.');
+          }
+        case FinancialReceiptBytesAccess(
+            :final fileName,
+            :final contentType,
+            :final bytes,
+          ):
+          final directory = Directory(
+            '${Directory.systemTemp.path}${Platform.pathSeparator}financial_receipts',
+          );
+          await directory.create(recursive: true);
+          final safeId =
+              transaction.id.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+          final file = File(
+            '${directory.path}${Platform.pathSeparator}${safeId}_$fileName',
+          );
+          await file.writeAsBytes(bytes, flush: true);
+          _temporaryReceiptPaths.add(file.path);
+          final result = await OpenFilex.open(file.path, type: contentType);
+          if (result.type != ResultType.done) throw StateError(result.message);
+      }
+    } catch (error) {
+      debugPrint('[Receipts] secure open failed type=${error.runtimeType}');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('تعذر فتح الإيصال. تحقق من الصلاحية والملف.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final orgId = widget.organizationId ??
         ref
             .watch(organizationContextProvider)
             .currentOrganization?['organizationId'] as String?;
     final transaction = orgId == null
         ? null
         : ref.watch(financialTransactionProvider(
-            (organizationId: orgId, transactionId: transactionId)));
+            (organizationId: orgId, transactionId: widget.transactionId)));
     return Directionality(
       textDirection: ui.TextDirection.rtl,
       child: Scaffold(
@@ -42,7 +121,11 @@ class TransactionTimelineScreen extends ConsumerWidget {
                     const Center(child: Text('تعذر تحميل المعاملة.')),
                 data: (item) => item == null
                     ? const Center(child: Text('لم يتم العثور على المعاملة.'))
-                    : _TransactionDetails(transaction: item),
+                    : _TransactionDetails(
+                        transaction: item,
+                        opening: _opening,
+                        onOpenReceipt: () => _openReceipt(item),
+                      ),
               ),
       ),
     );
@@ -50,8 +133,14 @@ class TransactionTimelineScreen extends ConsumerWidget {
 }
 
 class _TransactionDetails extends StatelessWidget {
-  const _TransactionDetails({required this.transaction});
+  const _TransactionDetails({
+    required this.transaction,
+    required this.opening,
+    required this.onOpenReceipt,
+  });
   final TransactionModel transaction;
+  final bool opening;
+  final VoidCallback onOpenReceipt;
 
   @override
   Widget build(BuildContext context) {
@@ -87,9 +176,10 @@ class _TransactionDetails extends StatelessWidget {
             Text(label,
                 style: TextStyle(
                     color: color, fontSize: 20, fontWeight: FontWeight.bold)),
-            Text(formatBaisa(transaction.amountDeclaredBaisa),
-                style:
-                    const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+            OmrAmount(
+              amountBaisa: transaction.amountDeclaredBaisa,
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
             Text(DateFormat('yyyy/MM/dd - HH:mm')
                 .format(transaction.submittedAt)),
           ]),
@@ -109,20 +199,23 @@ class _TransactionDetails extends StatelessWidget {
               leading: const Icon(Icons.person_outline),
               title: Text(allocation.beneficiaryName),
               subtitle: Text(allocation.chargeTitle),
-              trailing: Text(formatBaisa(allocation.amountAllocatedBaisa),
-                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              trailing: OmrAmount(
+                amountBaisa: allocation.amountAllocatedBaisa,
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
           ),
         const SizedBox(height: 16),
         OutlinedButton.icon(
-          onPressed: () async {
-            final uri = Uri.tryParse(transaction.receiptUrl);
-            if (uri != null) {
-              await launchUrl(uri, mode: LaunchMode.externalApplication);
-            }
-          },
-          icon: const Icon(Icons.open_in_new),
-          label: const Text('عرض ملف الإيصال'),
+          onPressed: opening ? null : onOpenReceipt,
+          icon: opening
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.open_in_new),
+          label: Text(opening ? 'جارٍ فتح الإيصال...' : 'عرض ملف الإيصال'),
         ),
         const SizedBox(height: 16),
         const Text('مسار المعاملة',

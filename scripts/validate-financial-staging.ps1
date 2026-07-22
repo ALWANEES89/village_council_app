@@ -10,6 +10,10 @@ if ($ProjectId -eq 'alrahmat-console') {
   throw 'Production project alrahmat-console is explicitly forbidden.'
 }
 
+if (-not $ProjectId.StartsWith('demo-', [System.StringComparison]::Ordinal)) {
+  throw "QA validation requires an explicit demo-* project. Refusing: $ProjectId"
+}
+
 $requiredFiles = @(
   'firebase.json',
   'firestore.rules',

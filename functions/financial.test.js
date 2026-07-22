@@ -14,6 +14,18 @@ const {
   subscriptionPeriod,
 } = require("./financial_core");
 const { commitWrites, parseOptions, validateOptions } = require("../scripts/migrate-financial-v1");
+const {
+  formatOmaniRialForSystemNotification,
+  formatOmaniRialNumber,
+  renderStructuredNotificationBody,
+} = require("./omr_currency");
+const {
+  notification,
+  receiptBytesMatchContentType,
+  receiptDownloadRuntime,
+  requireBaisa,
+  requireNonNegativeBaisa,
+} = require("./financial")._test;
 
 test("Arabic normalization ignores hamza, diacritics and tatweel", () => {
   assert.equal(normalizeArabic("إِبْــرَاهِيم"), normalizeArabic("ابراهيم"));
@@ -42,6 +54,61 @@ test("legacy OMR integer and decimal amounts always become baisa", () => {
   assert.equal(readBaisaField({ amountBaisa: 5000 }, "amountBaisa"), 5000);
   assert.equal(readMoneyWithLegacy({ amount: 5 }, "amountBaisa", "amount"), 5000);
   assert.equal(legacyOmaniRialsToBaisa(0), 0);
+});
+
+test("OMR notification formatting uses three decimals and no raw baisa text", () => {
+  assert.equal(formatOmaniRialNumber(5000), "5.000");
+  assert.equal(formatOmaniRialNumber(8000), "8.000");
+  assert.equal(formatOmaniRialNumber(12500), "12.500");
+  assert.equal(formatOmaniRialNumber(7500), "7.500");
+  assert.equal(formatOmaniRialForSystemNotification(12500), "12.500 ر.ع.");
+  const body = renderStructuredNotificationBody({
+    body: "legacy fallback",
+    bodyTemplate: "تم استلام مبلغ {amount}.",
+    amountBaisa: 12500,
+    currencyCode: "OMR",
+  });
+  assert.equal(body, "تم استلام مبلغ 12.500 ر.ع.");
+  assert.ok(!body.includes("12500"));
+  assert.ok(!body.includes("بيسة"));
+});
+
+test("legacy notification bodies remain unchanged without structured OMR data", () => {
+  assert.equal(renderStructuredNotificationBody({ body: "legacy notification" }), "legacy notification");
+  assert.equal(renderStructuredNotificationBody({
+    body: "legacy notification",
+    bodyTemplate: "{amount}",
+    amountBaisa: 5000,
+    currencyCode: "USD",
+  }), "legacy notification");
+});
+
+test("financial notification payload stores structured OMR data and a safe system fallback", () => {
+  const payload = notification(
+    "member", "o1", "n1", "title", "fallback", "receiptSubmitted", "r1", "reviewer", "receipt",
+    { amountBaisa: 12500, currencyCode: "OMR", bodyTemplate: "إيصال بقيمة {amount}." }
+  );
+  assert.equal(payload.amountBaisa, 12500);
+  assert.equal(payload.currencyCode, "OMR");
+  assert.equal(payload.bodyTemplate, "إيصال بقيمة {amount}.");
+  assert.equal(payload.body, "إيصال بقيمة 12.500 ر.ع.");
+  assert.ok(!payload.body.includes("12500"));
+  assert.ok(!payload.body.includes("بيسة"));
+});
+
+test("monetary validation errors do not expose internal field names or baisa units", () => {
+  for (const validate of [
+    () => requireBaisa(0, "amountBaisa"),
+    () => requireBaisa(1.5, "amountBaisa"),
+    () => requireNonNegativeBaisa(-1, "balanceBaisa"),
+  ]) {
+    assert.throws(validate, (error) => {
+      assert.equal(error.code, "invalid-argument");
+      assert.equal(error.message, "Invalid monetary amount.");
+      assert.doesNotMatch(error.message, /baisa|amountBaisa|balanceBaisa/i);
+      return true;
+    });
+  }
 });
 
 test("migration money readers reject missing, negative and non-finite values", () => {
@@ -115,4 +182,29 @@ test("receipt storage identity rejects cross-tenant or malformed paths", () => {
     organizationId: "o1", userId: "u1", receiptId: "r1", fileName: "a.pdf",
   });
   assert.equal(receiptStorageIdentity("organizations/o1/receipts/r1/a.pdf"), null);
+});
+
+test("receipt download runtime is server-only and restricted to the approved demo project", () => {
+  assert.equal(receiptDownloadRuntime({
+    FUNCTIONS_EMULATOR: "true",
+    GCLOUD_PROJECT: "demo-financial-prestaging",
+  }), "emulator");
+  assert.equal(receiptDownloadRuntime({
+    FUNCTIONS_EMULATOR: "false",
+    GCLOUD_PROJECT: "demo-financial-prestaging",
+  }), "production");
+  assert.throws(() => receiptDownloadRuntime({
+    FUNCTIONS_EMULATOR: "true",
+    GCLOUD_PROJECT: "alrahmat-console",
+  }), /restricted to demo-financial-prestaging/);
+});
+
+test("receipt byte signatures match only supported content types", () => {
+  assert.equal(receiptBytesMatchContentType(Buffer.from("%PDF-1.7\n"), "application/pdf"), true);
+  assert.equal(receiptBytesMatchContentType(Buffer.from([0xff, 0xd8, 0xff, 0x00]), "image/jpeg"), true);
+  assert.equal(receiptBytesMatchContentType(
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    "image/png"
+  ), true);
+  assert.equal(receiptBytesMatchContentType(Buffer.from("not-a-pdf"), "application/pdf"), false);
 });

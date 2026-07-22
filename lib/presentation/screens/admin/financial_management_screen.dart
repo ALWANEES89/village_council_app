@@ -6,8 +6,10 @@ import 'package:go_router/go_router.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/formatters/omr_currency.dart';
 import '../../../data/models/financial_models.dart';
 import '../../../providers/app_providers.dart';
+import '../../widgets/omr_amount.dart';
 
 class FinancialManagementScreen extends ConsumerWidget {
   const FinancialManagementScreen({super.key});
@@ -75,17 +77,17 @@ class _SettingsTab extends ConsumerWidget {
               _InfoCard(
                   icon: Icons.event_seat_outlined,
                   title: 'رسم حجز العضو',
-                  value: formatBaisa(settings.memberBookingFeeBaisa),
+                  amountBaisa: settings.memberBookingFeeBaisa,
                   onTap: () => _editSettings(context, ref, settings)),
               _InfoCard(
                   icon: Icons.person_add_alt_outlined,
                   title: 'رسم حجز غير العضو',
-                  value: formatBaisa(settings.nonMemberBookingFeeBaisa),
+                  amountBaisa: settings.nonMemberBookingFeeBaisa,
                   onTap: () => _editSettings(context, ref, settings)),
               _InfoCard(
                   icon: Icons.celebration_outlined,
                   title: 'رسم المناسبة',
-                  value: formatBaisa(settings.eventBookingFeeBaisa),
+                  amountBaisa: settings.eventBookingFeeBaisa,
                   onTap: () => _editSettings(context, ref, settings)),
               const Card(
                 child: ListTile(
@@ -112,11 +114,11 @@ class _SettingsTab extends ConsumerWidget {
       BuildContext context, WidgetRef ref, FinancialSettings settings) async {
     var mode = settings.feeMode;
     final member = TextEditingController(
-        text: (settings.memberBookingFeeBaisa / 1000).toStringAsFixed(3));
+        text: formatOmaniRialNumber(settings.memberBookingFeeBaisa));
     final nonMember = TextEditingController(
-        text: (settings.nonMemberBookingFeeBaisa / 1000).toStringAsFixed(3));
+        text: formatOmaniRialNumber(settings.nonMemberBookingFeeBaisa));
     final event = TextEditingController(
-        text: (settings.eventBookingFeeBaisa / 1000).toStringAsFixed(3));
+        text: formatOmaniRialNumber(settings.eventBookingFeeBaisa));
     final updated = await showDialog<FinancialSettings>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -135,16 +137,16 @@ class _SettingsTab extends ConsumerWidget {
                   ),
                   TextField(
                       controller: member,
-                      decoration: const InputDecoration(
-                          labelText: 'رسم حجز العضو (ر.ع)')),
+                      decoration:
+                          omrAmountInputDecoration(labelText: 'رسم حجز العضو')),
                   TextField(
                       controller: nonMember,
-                      decoration: const InputDecoration(
-                          labelText: 'رسم حجز غير العضو (ر.ع)')),
+                      decoration: omrAmountInputDecoration(
+                          labelText: 'رسم حجز غير العضو')),
                   TextField(
                       controller: event,
-                      decoration: const InputDecoration(
-                          labelText: 'رسم المناسبة (ر.ع)')),
+                      decoration:
+                          omrAmountInputDecoration(labelText: 'رسم المناسبة')),
                 ])),
                 actions: [
                   TextButton(
@@ -222,8 +224,16 @@ class _PlansTab extends ConsumerWidget {
                             plan.active ? Colors.amber.shade800 : Colors.grey),
                     title: Text(plan.nameArabic,
                         style: const TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: Text(
-                        '${_cycleLabel(plan.billingCycle)} • ${formatBaisa(plan.amountBaisa)}\n${plan.descriptionArabic}'),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        LabeledOmrAmount(
+                          label: '${_cycleLabel(plan.billingCycle)} •',
+                          amountBaisa: plan.amountBaisa,
+                        ),
+                        Text(plan.descriptionArabic),
+                      ],
+                    ),
                     isThreeLine: true,
                     trailing:
                         Chip(label: Text(plan.active ? 'مفعلة' : 'معطلة')),
@@ -240,7 +250,7 @@ class _PlansTab extends ConsumerWidget {
     final name = TextEditingController(text: plan?.nameArabic);
     final description = TextEditingController(text: plan?.descriptionArabic);
     final amount = TextEditingController(
-        text: plan == null ? '' : (plan.amountBaisa / 1000).toStringAsFixed(3));
+        text: plan == null ? '' : formatOmaniRialNumber(plan.amountBaisa));
     var cycle = plan?.billingCycle ?? BillingCycle.monthly;
     var active = plan?.active ?? true;
     final save = await showDialog<bool>(
@@ -260,7 +270,7 @@ class _PlansTab extends ConsumerWidget {
                     TextField(
                         controller: amount,
                         decoration:
-                            const InputDecoration(labelText: 'المبلغ (ر.ع)')),
+                            omrAmountInputDecoration(labelText: 'المبلغ')),
                     DropdownButtonFormField<BillingCycle>(
                         initialValue: cycle,
                         items: BillingCycle.values
@@ -397,13 +407,29 @@ class _MembersTabState extends ConsumerState<_MembersTab> {
                           : null),
                   title: Text(member.fullName,
                       style: const TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text(
-                      'رقم ${member.memberNumber} • المتبقي ${formatBaisa(balance)}'),
+                  subtitle: LabeledOmrAmount(
+                    label: 'رقم ${member.memberNumber} • المتبقي',
+                    amountBaisa: balance,
+                  ),
                   children: [
                     Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Text(
-                            'المطلوب ${formatBaisa(due)}  •  المدفوع ${formatBaisa(paid)}  •  المتبقي ${formatBaisa(balance)}')),
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          OmrAmountPairLine(
+                            firstLabel: 'المطلوب',
+                            firstAmountBaisa: due,
+                            secondLabel: 'المدفوع',
+                            secondAmountBaisa: paid,
+                          ),
+                          LabeledOmrAmount(
+                            label: 'المتبقي',
+                            amountBaisa: balance,
+                          ),
+                        ],
+                      ),
+                    ),
                     Wrap(spacing: 8, children: [
                       OutlinedButton(
                           onPressed: () => _accountDialog(member),
@@ -460,8 +486,8 @@ class _MembersTabState extends ConsumerState<_MembersTab> {
                     if (override == FeeOverrideType.custom)
                       TextField(
                           controller: amount,
-                          decoration: const InputDecoration(
-                              labelText: 'المبلغ المخصص (ر.ع)')),
+                          decoration: omrAmountInputDecoration(
+                              labelText: 'المبلغ المخصص')),
                     if (override == FeeOverrideType.exempt)
                       TextField(
                           controller: reason,
@@ -519,8 +545,7 @@ class _MembersTabState extends ConsumerState<_MembersTab> {
                         const InputDecoration(labelText: 'الوصف والتوثيق')),
                 TextField(
                     controller: amount,
-                    decoration:
-                        const InputDecoration(labelText: 'المبلغ (ر.ع)')),
+                    decoration: omrAmountInputDecoration(labelText: 'المبلغ')),
               ]),
               actions: [
                 TextButton(
@@ -559,18 +584,23 @@ class _InfoCard extends StatelessWidget {
   const _InfoCard(
       {required this.icon,
       required this.title,
-      required this.value,
-      required this.onTap});
+      this.value,
+      this.amountBaisa,
+      required this.onTap})
+      : assert(value != null || amountBaisa != null);
   final IconData icon;
   final String title;
-  final String value;
+  final String? value;
+  final int? amountBaisa;
   final VoidCallback onTap;
   @override
   Widget build(BuildContext context) => Card(
       child: ListTile(
           leading: Icon(icon, color: AppColors.primary),
           title: Text(title),
-          subtitle: Text(value),
+          subtitle: amountBaisa == null
+              ? Text(value!)
+              : OmrAmount(amountBaisa: amountBaisa!),
           trailing: const Icon(Icons.edit_outlined),
           onTap: onTap));
 }

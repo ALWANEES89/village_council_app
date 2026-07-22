@@ -8,6 +8,7 @@ import '../../../core/notifications/notification_deeplink.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/app_notification_model.dart';
 import '../../../providers/app_providers.dart';
+import '../../widgets/omr_amount.dart';
 
 class NotificationsScreen extends ConsumerWidget {
   const NotificationsScreen({super.key});
@@ -149,7 +150,7 @@ class _NotificationCard extends ConsumerWidget {
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(notification.body),
+            _NotificationBody(notification: notification),
             if (organizationName?.isNotEmpty == true) Text(organizationName!),
             Text(
               DateFormat('yyyy/MM/dd - HH:mm').format(notification.createdAt),
@@ -161,6 +162,31 @@ class _NotificationCard extends ConsumerWidget {
             ? const Icon(Icons.circle, size: 10, color: AppColors.primary)
             : null,
       ),
+    );
+  }
+}
+
+class _NotificationBody extends StatelessWidget {
+  const _NotificationBody({required this.notification});
+
+  final AppNotificationModel notification;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!notification.hasStructuredOmrAmount) {
+      return Text(notification.body);
+    }
+    final parts = notification.bodyTemplate!.split('{amount}');
+    return Wrap(
+      spacing: 4,
+      runSpacing: 2,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        if (parts.first.isNotEmpty) Text(parts.first),
+        OmrAmount(amountBaisa: notification.amountBaisa!),
+        if (parts.length > 1 && parts.sublist(1).join('{amount}').isNotEmpty)
+          Text(parts.sublist(1).join('{amount}')),
+      ],
     );
   }
 }

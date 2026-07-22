@@ -10,10 +10,10 @@ const path = require('path');
 const { GoogleAuth } = require('google-auth-library');
 
 const ROOT = path.resolve(__dirname, '..');
-const KEY = path.join(ROOT, 'local_keys', 'alrahmat-service-account.json');
 const RULES = path.join(ROOT, 'firestore.rules');
-const OWNER = '3PpbBzCACsh8PphpbN5Gp1keolF3';
-const ORG = 'rahmat_general_council';
+const EXPECTED_PROJECT_ID = 'demo-financial-prestaging';
+const OWNER = 'qa-system-owner';
+const ORG = 'qa-financial-council';
 const DOCS = '/databases/(default)/documents';
 const adminPath = `${DOCS}/platform_admins/${OWNER}`;
 
@@ -38,7 +38,21 @@ const cases = [
 ];
 
 async function main() {
-  const sa = JSON.parse(fs.readFileSync(KEY, 'utf8'));
+  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT;
+  const credentialPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (projectId !== EXPECTED_PROJECT_ID || projectId === 'alrahmat-console') {
+    throw new Error(`Refusing projectId=${projectId || 'missing'}. Expected ${EXPECTED_PROJECT_ID}.`);
+  }
+  if (process.env.ALLOW_REMOTE_RULESET_QA !== 'true') {
+    throw new Error('Remote TestRuleset QA is disabled. Use Emulator tests for this round.');
+  }
+  if (!credentialPath || !fs.existsSync(credentialPath)) {
+    throw new Error('An explicit demo-only GOOGLE_APPLICATION_CREDENTIALS path is required.');
+  }
+  const sa = JSON.parse(fs.readFileSync(credentialPath, 'utf8'));
+  if (sa.project_id !== EXPECTED_PROJECT_ID) {
+    throw new Error(`Credential project mismatch: ${sa.project_id || 'missing'}.`);
+  }
   const source = fs.readFileSync(RULES, 'utf8');
   const auth = new GoogleAuth({ credentials: sa,
     scopes: ['https://www.googleapis.com/auth/firebase', 'https://www.googleapis.com/auth/cloud-platform'] });
@@ -58,4 +72,7 @@ async function main() {
     if (r.state !== 'SUCCESS' && r.debugMessages) console.log('   debug:', JSON.stringify(r.debugMessages));
   });
 }
-main().catch((e) => console.error('ERR', e));
+main().catch((e) => {
+  console.error('ERR', e.message);
+  process.exitCode = 1;
+});

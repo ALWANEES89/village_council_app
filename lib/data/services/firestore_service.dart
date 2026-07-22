@@ -21,13 +21,20 @@ class FirestoreService {
   }
 
   // ── Payments ──────────────────────────────────────────────
-  Stream<List<PaymentModel>> memberPaymentsStream(String memberId) {
+  Stream<List<PaymentModel>> memberPaymentsStream({
+    required String memberId,
+    required String organizationId,
+  }) {
     return _db
         .collection('payments')
         .where('memberId', isEqualTo: memberId)
-        .orderBy('year', descending: true)
+        .where('organizationId', isEqualTo: organizationId)
         .snapshots()
-        .map((snap) => snap.docs.map(PaymentModel.fromFirestore).toList());
+        .map((snap) {
+      final payments = snap.docs.map(PaymentModel.fromFirestore).toList();
+      payments.sort((left, right) => right.year.compareTo(left.year));
+      return payments;
+    });
   }
 
   Future<PaymentModel?> getPayment(String paymentId) async {
@@ -158,15 +165,6 @@ class FirestoreService {
         .map((snap) => snap.docs.map(TransactionModel.fromFirestore).toList());
   }
 
-  Stream<List<TransactionModel>> pendingTransactionsStream() {
-    return _db
-        .collection('transactions')
-        .where('currentStatus', isEqualTo: TransactionStatus.submitted.name)
-        .orderBy('submittedAt')
-        .snapshots()
-        .map((snap) => snap.docs.map(TransactionModel.fromFirestore).toList());
-  }
-
   Future<void> approveTransaction({
     required String transactionId,
     required String paymentId,
@@ -205,32 +203,5 @@ class FirestoreService {
       'timeline': FieldValue.arrayUnion([newEvent.toMap()]),
     });
     await updatePaymentStatus(paymentId, PaymentStatus.rejected);
-  }
-
-  // ── Admin Stats ────────────────────────────────────────────
-  Future<Map<String, dynamic>> getAdminStats(int year, int month) async {
-    final allMembers = await getAllMembers();
-    final paymentsSnap = await _db
-        .collection('payments')
-        .where('year', isEqualTo: year)
-        .where('month', isEqualTo: month)
-        .get();
-    final payments = paymentsSnap.docs.map(PaymentModel.fromFirestore).toList();
-
-    final totalCollected = payments
-        .where((p) => p.status == PaymentStatus.paid)
-        .fold<double>(0.0, (total, payment) => total + payment.amount);
-
-    final paidMemberIds = payments
-        .where((p) => p.status == PaymentStatus.paid)
-        .map((p) => p.memberId)
-        .toSet();
-
-    return {
-      'totalCollected': totalCollected,
-      'committedCount': paidMemberIds.length,
-      'lateCount': allMembers.length - paidMemberIds.length,
-      'totalMembers': allMembers.length,
-    };
   }
 }

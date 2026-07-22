@@ -10,6 +10,7 @@ import '../../../data/models/financial_models.dart';
 import '../../../data/models/transaction_model.dart';
 import '../../../domain/financial/financial_logic.dart';
 import '../../../providers/app_providers.dart';
+import '../../widgets/omr_amount.dart';
 
 class MemberDashboard extends ConsumerStatefulWidget {
   const MemberDashboard({super.key});
@@ -166,21 +167,21 @@ class _MemberDashboardState extends ConsumerState<MemberDashboard> {
             children: [
               _SummaryCard(
                   label: 'إجمالي الرسوم',
-                  value: formatBaisa(totalDue),
+                  amountBaisa: totalDue,
                   icon: Icons.request_quote_outlined),
               _SummaryCard(
                   label: 'إجمالي المدفوع',
-                  value: formatBaisa(totalPaid),
+                  amountBaisa: totalPaid,
                   icon: Icons.check_circle_outline,
                   color: Colors.green),
               _SummaryCard(
                   label: 'المتبقي',
-                  value: formatBaisa(totalBalance),
+                  amountBaisa: totalBalance,
                   icon: Icons.account_balance_wallet_outlined,
                   color: Colors.red),
               _SummaryCard(
                   label: 'قيد المراجعة',
-                  value: formatBaisa(pending),
+                  amountBaisa: pending,
                   icon: Icons.hourglass_top,
                   color: Colors.orange),
               _SummaryCard(
@@ -306,7 +307,9 @@ class _MemberDashboardState extends ConsumerState<MemberDashboard> {
                 child: ListTile(
                   leading: const Icon(Icons.group_outlined,
                       color: AppColors.primary),
-                  title: Text(formatBaisa(transaction.amountDeclaredBaisa)),
+                  title: OmrAmount(
+                    amountBaisa: transaction.amountDeclaredBaisa,
+                  ),
                   subtitle: Text(
                     transaction.allocations
                         .where((item) =>
@@ -405,11 +408,14 @@ class _AccountHeader extends StatelessWidget {
 class _SummaryCard extends StatelessWidget {
   const _SummaryCard(
       {required this.label,
-      required this.value,
+      this.value,
+      this.amountBaisa,
       required this.icon,
-      this.color = AppColors.primary});
+      this.color = AppColors.primary})
+      : assert(value != null || amountBaisa != null);
   final String label;
-  final String value;
+  final String? value;
+  final int? amountBaisa;
   final IconData icon;
   final Color color;
   @override
@@ -423,9 +429,16 @@ class _SummaryCard extends StatelessWidget {
               Icon(icon, color: color),
               const SizedBox(height: 8),
               Text(label, style: const TextStyle(color: Colors.grey)),
-              Text(value,
+              if (amountBaisa != null)
+                OmrAmount(
+                  amountBaisa: amountBaisa!,
                   style: const TextStyle(
-                      fontWeight: FontWeight.bold, fontSize: 16)),
+                      fontWeight: FontWeight.bold, fontSize: 16),
+                )
+              else
+                Text(value!,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 16)),
             ]),
           ),
         ),
@@ -467,10 +480,18 @@ class _ChargeCard extends StatelessWidget {
               Text(
                   '${charge.chargeType.name} • ${charge.periodKey ?? 'بدون فترة'}'),
               const SizedBox(height: 8),
-              Text(
-                  'المبلغ: ${formatBaisa(charge.amountDueBaisa)}  •  المدفوع: ${formatBaisa(charge.amountPaidBaisa)}'),
-              Text(
-                  'المتبقي: ${formatBaisa(charge.balanceBaisa)}  •  الاستحقاق: ${charge.dueDate == null ? '-' : DateFormat('yyyy/MM/dd').format(charge.dueDate!)}'),
+              OmrAmountPairLine(
+                firstLabel: 'المبلغ:',
+                firstAmountBaisa: charge.amountDueBaisa,
+                secondLabel: 'المدفوع:',
+                secondAmountBaisa: charge.amountPaidBaisa,
+              ),
+              LabeledOmrAmount(
+                label: 'المتبقي:',
+                amountBaisa: charge.balanceBaisa,
+                trailingText:
+                    '• الاستحقاق: ${charge.dueDate == null ? '-' : DateFormat('yyyy/MM/dd').format(charge.dueDate!)}',
+              ),
               if (charge.lastPayerName?.isNotEmpty == true)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),

@@ -9,10 +9,12 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/formatters/omr_currency.dart';
 import '../../../data/models/financial_models.dart';
 import '../../../data/models/transaction_model.dart';
 import '../../../domain/financial/financial_logic.dart';
 import '../../../providers/app_providers.dart';
+import '../../widgets/omr_amount.dart';
 
 class ReceiptUploadScreen extends ConsumerStatefulWidget {
   const ReceiptUploadScreen({
@@ -22,7 +24,6 @@ class ReceiptUploadScreen extends ConsumerStatefulWidget {
     this.organizationId,
     this.membershipId,
     this.userId,
-    this.amountDeclaredBaisa,
   });
 
   final String? paymentId;
@@ -30,7 +31,6 @@ class ReceiptUploadScreen extends ConsumerStatefulWidget {
   final String? organizationId;
   final String? membershipId;
   final String? userId;
-  final int? amountDeclaredBaisa;
 
   @override
   ConsumerState<ReceiptUploadScreen> createState() =>
@@ -66,11 +66,6 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.amountDeclaredBaisa != null) {
-      final baisa = widget.amountDeclaredBaisa!;
-      _amountController.text =
-          '${baisa ~/ 1000}.${(baisa % 1000).toString().padLeft(3, '0')}';
-    }
     WidgetsBinding.instance.addPostFrameCallback((_) => _initializeSelf());
   }
 
@@ -113,14 +108,15 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
       setState(() {
         _chargesByMember[membershipId] = charges;
         if (initialChargeId?.isNotEmpty == true) {
-          for (final charge
-              in charges.where((item) => item.id == initialChargeId)) {
+          for (final charge in charges.where((item) =>
+              item.id == initialChargeId && !item.hasPendingReceipt)) {
             _allocations[charge.id] = charge.balanceBaisa;
           }
         }
       });
     } catch (error) {
-      _showMessage('تعذر تحميل الرسوم المتاحة: $error', error: true);
+      debugPrint('[Receipts] charge load failed type=${error.runtimeType}');
+      _showMessage('تعذر تحميل الرسوم المتاحة. حاول مجددًا.', error: true);
     } finally {
       if (mounted) setState(() => _loadingCharges = false);
     }
@@ -168,7 +164,8 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
           .where((item) => item.membershipId != _payerMembershipId)
           .toList());
     } catch (error) {
-      _showMessage('تعذر البحث عن الأعضاء: $error', error: true);
+      debugPrint('[Receipts] member search failed type=${error.runtimeType}');
+      _showMessage('تعذر البحث عن الأعضاء. حاول مجددًا.', error: true);
     } finally {
       if (mounted) setState(() => _searching = false);
     }
@@ -198,19 +195,30 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
 
   Future<void> _editAllocation(FinancialCharge charge) async {
     final controller = TextEditingController(
-      text: ((_allocations[charge.id] ?? charge.balanceBaisa) / 1000)
-          .toStringAsFixed(3),
+      text: formatOmaniRialNumber(
+        _allocations[charge.id] ?? charge.balanceBaisa,
+      ),
     );
     final value = await showDialog<int>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(charge.titleArabic),
-        content: TextField(
-          controller: controller,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: InputDecoration(
-              labelText: 'المبلغ المخصص',
-              helperText: 'الحد الأقصى ${formatBaisa(charge.balanceBaisa)}'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: controller,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: omrAmountInputDecoration(labelText: 'المبلغ المخصص'),
+            ),
+            const SizedBox(height: 8),
+            LabeledOmrAmount(
+              label: 'الحد الأقصى',
+              amountBaisa: charge.balanceBaisa,
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -260,6 +268,30 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
   int get _allocationTotal =>
       _allocations.values.fold(0, (sum, value) => sum + value);
   int? get _declared => parseOmaniRialsToBaisa(_amountController.text);
+
+  FinancialCharge? _chargeById(String chargeId) {
+    for (final charges in _chargesByMember.values) {
+      for (final charge in charges) {
+        if (charge.id == chargeId) return charge;
+      }
+    }
+    return null;
+  }
+
+  void _onAmountChanged(String _) {
+    if (_allocations.length == 1) {
+      final chargeId = _allocations.keys.single;
+      final charge = _chargeById(chargeId);
+      if (charge != null) {
+        _allocations[chargeId] = suggestedAllocationAmount(
+          balanceBaisa: charge.balanceBaisa,
+          alreadyAllocatedBaisa: 0,
+          declaredBaisa: _declared,
+        );
+      }
+    }
+    setState(() {});
+  }
 
   List<ReceiptAllocation> _buildAllocations() {
     final result = <ReceiptAllocation>[];
@@ -425,8 +457,13 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
                   onRemove: () => setState(
                       () => _removeBeneficiary(beneficiary.membershipId)),
                   onToggle: (charge, selected) => setState(() {
+                    if (charge.hasPendingReceipt) return;
                     if (selected) {
-                      _allocations[charge.id] = charge.balanceBaisa;
+                      _allocations[charge.id] = suggestedAllocationAmount(
+                        balanceBaisa: charge.balanceBaisa,
+                        alreadyAllocatedBaisa: _allocationTotal,
+                        declaredBaisa: _declared,
+                      );
                     } else {
                       _allocations.remove(charge.id);
                     }
@@ -436,15 +473,13 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
             const SizedBox(height: 20),
             TextField(
               controller: _amountController,
-              onChanged: (_) => setState(() {}),
+              onChanged: _onAmountChanged,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
+              decoration: omrAmountInputDecoration(
                 labelText: 'المبلغ المدفوع فعليًا في التحويل',
-                hintText: '12.500',
-                suffixText: 'ر.ع',
-                border: OutlineInputBorder(),
-              ),
+                helperText: 'للدفع الجزئي أدخل المبلغ الفعلي، ثم اختر الرسم.',
+              ).copyWith(border: const OutlineInputBorder()),
             ),
             const SizedBox(height: 12),
             _AmountMatchCard(
@@ -552,15 +587,33 @@ class _BeneficiaryCharges extends StatelessWidget {
               for (final charge in charges)
                 CheckboxListTile(
                   value: allocations.containsKey(charge.id),
-                  onChanged: (value) => onToggle(charge, value == true),
+                  onChanged: charge.hasPendingReceipt
+                      ? null
+                      : (value) => onToggle(charge, value == true),
                   title: Text(charge.titleArabic),
-                  subtitle: Text(
-                      'الرصيد ${formatBaisa(charge.balanceBaisa)}${allocations[charge.id] == null ? '' : ' • المخصص ${formatBaisa(allocations[charge.id]!)}'}'),
-                  secondary: allocations.containsKey(charge.id)
-                      ? IconButton(
-                          onPressed: () => onEdit(charge),
-                          icon: const Icon(Icons.edit_outlined))
-                      : null,
+                  subtitle: charge.hasPendingReceipt
+                      ? LabeledOmrAmount(
+                          label: 'قيد المراجعة • الرصيد',
+                          amountBaisa: charge.balanceBaisa,
+                        )
+                      : allocations[charge.id] == null
+                          ? LabeledOmrAmount(
+                              label: 'الرصيد',
+                              amountBaisa: charge.balanceBaisa,
+                            )
+                          : OmrAmountPairLine(
+                              firstLabel: 'الرصيد',
+                              firstAmountBaisa: charge.balanceBaisa,
+                              secondLabel: 'المخصص',
+                              secondAmountBaisa: allocations[charge.id]!,
+                            ),
+                  secondary: charge.hasPendingReceipt
+                      ? const Icon(Icons.hourglass_top, color: Colors.orange)
+                      : allocations.containsKey(charge.id)
+                          ? IconButton(
+                              onPressed: () => onEdit(charge),
+                              icon: const Icon(Icons.edit_outlined))
+                          : null,
                   controlAffinity: ListTileControlAffinity.leading,
                 ),
           ]),
@@ -588,10 +641,18 @@ class _AmountMatchCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: color)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(
-            'المبلغ المكتوب: ${declared == null ? '-' : formatBaisa(declared!)}'),
-        Text('مجموع المبالغ الموزعة: ${formatBaisa(allocated)}'),
-        Text('الفرق: ${formatBaisa(difference)}'),
+        if (declared == null)
+          const Text('المبلغ المكتوب: -')
+        else
+          LabeledOmrAmount(
+            label: 'المبلغ المكتوب:',
+            amountBaisa: declared!,
+          ),
+        LabeledOmrAmount(
+          label: 'مجموع المبالغ الموزعة:',
+          amountBaisa: allocated,
+        ),
+        LabeledOmrAmount(label: 'الفرق:', amountBaisa: difference),
         const SizedBox(height: 6),
         Row(children: [
           Icon(matches ? Icons.check_circle : Icons.warning_amber_rounded,

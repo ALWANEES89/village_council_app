@@ -9,12 +9,12 @@ const path = require('path');
 const { GoogleAuth } = require('google-auth-library');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
-const FALLBACK_KEY = path.join(PROJECT_ROOT, 'local_keys', 'alrahmat-service-account.json');
 const RULES_PATH = path.join(PROJECT_ROOT, 'firestore.rules');
+const EXPECTED_PROJECT_ID = 'demo-financial-prestaging';
 
-const OWNER = '3PpbBzCACsh8PphpbN5Gp1keolF3';
-const ORG = 'JDxPUEmnPN3tYMyGEVcp';
-const TARGET = 'targetMemberUid';
+const OWNER = 'qa-system-owner';
+const ORG = 'qa-financial-council';
+const TARGET = 'qa-target-member';
 const DOCS = '/databases/(default)/documents';
 
 const adminPath = `${DOCS}/platform_admins/${OWNER}`;
@@ -65,10 +65,21 @@ const testCases = [
 ];
 
 async function main() {
-  const credPath = (process.env.GOOGLE_APPLICATION_CREDENTIALS &&
-    fs.existsSync(process.env.GOOGLE_APPLICATION_CREDENTIALS))
-    ? process.env.GOOGLE_APPLICATION_CREDENTIALS : FALLBACK_KEY;
+  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT;
+  const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (projectId !== EXPECTED_PROJECT_ID || projectId === 'alrahmat-console') {
+    throw new Error(`Refusing projectId=${projectId || 'missing'}. Expected ${EXPECTED_PROJECT_ID}.`);
+  }
+  if (process.env.ALLOW_REMOTE_RULESET_QA !== 'true') {
+    throw new Error('Remote TestRuleset QA is disabled. Use Emulator tests for this round.');
+  }
+  if (!credPath || !fs.existsSync(credPath)) {
+    throw new Error('An explicit demo-only GOOGLE_APPLICATION_CREDENTIALS path is required.');
+  }
   const sa = JSON.parse(fs.readFileSync(credPath, 'utf8'));
+  if (sa.project_id !== EXPECTED_PROJECT_ID) {
+    throw new Error(`Credential project mismatch: ${sa.project_id || 'missing'}.`);
+  }
   const source = fs.readFileSync(RULES_PATH, 'utf8');
 
   const auth = new GoogleAuth({
@@ -101,4 +112,7 @@ async function main() {
     }
   });
 }
-main().catch((e) => console.error('ERR', e));
+main().catch((e) => {
+  console.error('ERR', e.message);
+  process.exitCode = 1;
+});

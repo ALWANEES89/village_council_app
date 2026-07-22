@@ -182,9 +182,11 @@ final memberStreamProvider = StreamProvider.family<MemberModel?, String>(
   (ref, memberId) => ref.watch(firestoreServiceProvider).memberStream(memberId),
 );
 final memberPaymentsProvider =
-    StreamProvider.family<List<PaymentModel>, String>(
-  (ref, memberId) =>
-      ref.watch(firestoreServiceProvider).memberPaymentsStream(memberId),
+    StreamProvider.family<List<PaymentModel>, MemberFinancialKey>(
+  (ref, key) => ref.watch(firestoreServiceProvider).memberPaymentsStream(
+        memberId: key.membershipId,
+        organizationId: key.organizationId,
+      ),
 );
 final memberTransactionsProvider =
     StreamProvider.family<List<TransactionModel>, String>(
@@ -197,14 +199,6 @@ final totalPaidThisYearProvider =
       .watch(firestoreServiceProvider)
       .getTotalPaidThisYear(memberId, DateTime.now().year);
 });
-final pendingTransactionsProvider = StreamProvider<List<TransactionModel>>(
-  (ref) => ref.watch(firestoreServiceProvider).pendingTransactionsStream(),
-);
-final adminStatsProvider = FutureProvider<Map<String, dynamic>>((ref) {
-  final now = DateTime.now();
-  return ref.watch(firestoreServiceProvider).getAdminStats(now.year, now.month);
-});
-
 final financialSettingsProvider =
     StreamProvider.autoDispose.family<FinancialSettings, String>(
   (ref, organizationId) =>
@@ -302,34 +296,35 @@ class UploadNotifier extends StateNotifier<UploadState> {
         onProgress: (progress) => state = state.copyWith(progress: progress),
       );
       uploadedReceiptPath = upload.fullPath;
-      final transactionId = await _financialRepository.submitReceipt(
+      await _financialRepository.submitReceipt(
         receiptId: receiptId,
         organizationId: organizationId,
         payerMembershipId: membershipId,
         paymentScope: paymentScope,
         amountDeclaredBaisa: amountDeclaredBaisa,
-        receiptUrl: upload.url,
         receiptStoragePath: upload.fullPath,
         fileName: upload.fileName,
         fileType: upload.fileType,
         allocations: allocations,
       );
-      debugPrint(
-          '[Receipts] submitted transaction=$transactionId org=$organizationId');
+      debugPrint('[Receipts] submitted successfully');
       state = const UploadState();
       return true;
-    } catch (error, stackTrace) {
+    } catch (error) {
       if (uploadedReceiptPath != null) {
         try {
           await _financialRepository.cleanupOrphanReceipt(
             receiptStoragePath: uploadedReceiptPath,
           );
         } catch (cleanupError) {
-          debugPrint('[Receipts] deferred orphan cleanup: $cleanupError');
+          debugPrint(
+              '[Receipts] deferred orphan cleanup type=${cleanupError.runtimeType}');
         }
       }
-      debugPrint('[Receipts] upload failed: $error\n$stackTrace');
-      state = UploadState(error: error.toString());
+      debugPrint('[Receipts] upload failed type=${error.runtimeType}');
+      state = const UploadState(
+        error: 'تعذر إرسال الإيصال. تحقق من الملف والمبلغ ثم حاول مجددًا.',
+      );
       return false;
     }
   }

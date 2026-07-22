@@ -629,7 +629,9 @@ service cloud.firestore {
       match /bookings/{bookingId} {
         allow get: if isAuth() &&
           (resource.data.userId == request.auth.uid || canReviewBookings(organizationId));
-        allow list: if isOrganizationMember(organizationId) || canReviewBookings(organizationId) ||
+        // A member query must be constrained to its own userId. Availability for
+        // other bookings is exposed only through the redacted server callable.
+        allow list: if canReviewBookings(organizationId) ||
           (isAuth() && resource.data.userId == request.auth.uid);
         allow create: if isAuth() &&
           request.resource.data.bookingId == bookingId &&

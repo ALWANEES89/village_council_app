@@ -173,11 +173,11 @@ class _CouncilBookingScreenState extends ConsumerState<CouncilBookingScreen> {
           const SnackBar(content: Text('تم إرسال طلب الحجز للمراجعة')),
         );
       }
-    } catch (error, stackTrace) {
-      debugPrint('[Bookings] submit failed: $error\n$stackTrace');
+    } catch (error) {
+      debugPrint('[Bookings] submit failed type=${error.runtimeType}');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('تعذر إرسال طلب الحجز: $error')),
+          const SnackBar(content: Text('تعذر إرسال طلب الحجز. حاول مجددًا.')),
         );
       }
     }
@@ -208,9 +208,10 @@ class _CouncilBookingScreenState extends ConsumerState<CouncilBookingScreen> {
         ));
       }
     } catch (error) {
+      debugPrint('[Bookings] cancel failed type=${error.runtimeType}');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('تعذر إلغاء الحجز: $error')),
+          const SnackBar(content: Text('تعذر إلغاء الحجز. حاول مجددًا.')),
         );
       }
     }
@@ -219,16 +220,13 @@ class _CouncilBookingScreenState extends ConsumerState<CouncilBookingScreen> {
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(authStateProvider).value;
-    final guestMode = _membershipId?.isNotEmpty != true;
     final bookings = _organizationId == null
         ? null
-        : guestMode
-            ? ref.watch(bookingAvailabilityProvider((
-                organizationId: _organizationId!,
-                year: _visibleMonth.year,
-                month: _visibleMonth.month,
-              )))
-            : ref.watch(organizationBookingsProvider(_organizationId!));
+        : ref.watch(bookingAvailabilityProvider((
+            organizationId: _organizationId!,
+            year: _visibleMonth.year,
+            month: _visibleMonth.month,
+          )));
     final ownBookings = _organizationId == null || user == null
         ? null
         : ref.watch(userBookingsProvider((
@@ -299,23 +297,15 @@ class _CouncilBookingScreenState extends ConsumerState<CouncilBookingScreen> {
                   ),
                 const SizedBox(height: 14),
                 if (bookings != null)
-                  bookings.when(
-                    loading: () =>
-                        const Center(child: CircularProgressIndicator()),
-                    error: (_, __) => const Text(
-                      'تعذر تحميل مواعيد الحجز. حاول مرة أخرى.',
-                    ),
-                    data: (items) => _MonthCalendar(
-                      month: _visibleMonth,
-                      bookings: items,
-                      selectedDate: _selectedDate,
-                      onPrevious: () => setState(() => _visibleMonth = DateTime(
-                          _visibleMonth.year, _visibleMonth.month - 1)),
-                      onNext: () => setState(() => _visibleMonth = DateTime(
-                          _visibleMonth.year, _visibleMonth.month + 1)),
-                      onSelected: (date) =>
-                          setState(() => _selectedDate = date),
-                    ),
+                  BookingAvailabilityPanel(
+                    availability: bookings,
+                    month: _visibleMonth,
+                    selectedDate: _selectedDate,
+                    onPrevious: () => setState(() => _visibleMonth =
+                        DateTime(_visibleMonth.year, _visibleMonth.month - 1)),
+                    onNext: () => setState(() => _visibleMonth =
+                        DateTime(_visibleMonth.year, _visibleMonth.month + 1)),
+                    onSelected: (date) => setState(() => _selectedDate = date),
                   ),
                 const SizedBox(height: 14),
                 if (_selectedDate != null)
@@ -399,6 +389,43 @@ class _CouncilBookingScreenState extends ConsumerState<CouncilBookingScreen> {
   }
 }
 
+class BookingAvailabilityPanel extends StatelessWidget {
+  const BookingAvailabilityPanel({
+    super.key,
+    required this.availability,
+    required this.month,
+    required this.selectedDate,
+    required this.onPrevious,
+    required this.onNext,
+    required this.onSelected,
+  });
+
+  final AsyncValue<List<BookingModel>> availability;
+  final DateTime month;
+  final DateTime? selectedDate;
+  final VoidCallback onPrevious;
+  final VoidCallback onNext;
+  final ValueChanged<DateTime> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return availability.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (_, __) => const Text(
+        'تعذر تحميل مواعيد الحجز. حاول مرة أخرى.',
+      ),
+      data: (items) => _MonthCalendar(
+        month: month,
+        bookings: items,
+        selectedDate: selectedDate,
+        onPrevious: onPrevious,
+        onNext: onNext,
+        onSelected: onSelected,
+      ),
+    );
+  }
+}
+
 class _MonthCalendar extends StatelessWidget {
   const _MonthCalendar({
     required this.month,
@@ -474,6 +501,7 @@ class _MonthCalendar extends StatelessWidget {
                   DateTime.now().day,
                 ));
                 return InkWell(
+                  key: ValueKey('booking-day-$day'),
                   onTap: approved || past ? null : () => onSelected(date),
                   child: Container(
                     margin: const EdgeInsets.all(3),

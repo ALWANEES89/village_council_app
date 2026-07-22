@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:uuid/uuid.dart';
@@ -6,6 +9,84 @@ import '../models/financial_models.dart';
 import '../models/transaction_model.dart';
 
 typedef MemberFinancialKey = ({String organizationId, String membershipId});
+
+sealed class FinancialReceiptAccess {
+  const FinancialReceiptAccess({
+    required this.fileName,
+    required this.contentType,
+  });
+
+  final String fileName;
+  final String contentType;
+
+  factory FinancialReceiptAccess.fromMap(Map<String, dynamic> data) {
+    final fileName = data['fileName'];
+    final contentType = data['contentType'];
+    if (fileName is! String ||
+        !RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$').hasMatch(fileName) ||
+        contentType is! String ||
+        !const {
+          'application/pdf',
+          'image/jpeg',
+          'image/png',
+          'image/webp',
+        }.contains(contentType)) {
+      throw const FormatException('Invalid financial receipt descriptor.');
+    }
+    final kind = data['kind'];
+    if (kind == 'url' || (kind == null && data['url'] is String)) {
+      final url = Uri.tryParse(data['url'] as String? ?? '');
+      if (url == null || url.scheme != 'https' || url.host.isEmpty) {
+        throw const FormatException('Invalid financial receipt URL.');
+      }
+      return FinancialReceiptUrlAccess(
+        fileName: fileName,
+        contentType: contentType,
+        url: url,
+      );
+    }
+    if (kind == 'bytes') {
+      final encoded = data['bytesBase64'];
+      final sizeBytes = data['sizeBytes'];
+      if (encoded is! String ||
+          sizeBytes is! int ||
+          sizeBytes <= 0 ||
+          sizeBytes > 10 * 1024 * 1024) {
+        throw const FormatException('Invalid financial receipt bytes.');
+      }
+      final bytes = base64Decode(encoded);
+      if (bytes.length != sizeBytes) {
+        throw const FormatException('Financial receipt size mismatch.');
+      }
+      return FinancialReceiptBytesAccess(
+        fileName: fileName,
+        contentType: contentType,
+        bytes: bytes,
+      );
+    }
+    throw const FormatException('Unsupported financial receipt access type.');
+  }
+}
+
+final class FinancialReceiptUrlAccess extends FinancialReceiptAccess {
+  const FinancialReceiptUrlAccess({
+    required super.fileName,
+    required super.contentType,
+    required this.url,
+  });
+
+  final Uri url;
+}
+
+final class FinancialReceiptBytesAccess extends FinancialReceiptAccess {
+  const FinancialReceiptBytesAccess({
+    required super.fileName,
+    required super.contentType,
+    required this.bytes,
+  });
+
+  final Uint8List bytes;
+}
 
 class FinancialRepository {
   FinancialRepository(
@@ -72,15 +153,32 @@ class FinancialRepository {
 
   Future<List<MemberDirectoryEntry>> listFinancialMembers(
       String organizationId) async {
-    final result = await _functions
-        .httpsCallable('listFinancialMembers')
-        .call<Map<String, dynamic>>({'organizationId': organizationId});
-    final rows = (result.data['members'] as List<dynamic>? ?? const [])
-        .whereType<Map<Object?, Object?>>();
-    return rows
-        .map((row) =>
-            MemberDirectoryEntry.fromMap(Map<String, dynamic>.from(row)))
-        .toList(growable: false);
+    final members = <MemberDirectoryEntry>[];
+    final seenTokens = <String>{};
+    String? pageToken;
+    var pageCount = 0;
+    do {
+      if (++pageCount > 1000) {
+        throw StateError('Financial member pagination exceeded safety limit.');
+      }
+      final result = await _functions
+          .httpsCallable('listFinancialMembers')
+          .call<Map<String, dynamic>>({
+        'organizationId': organizationId,
+        'pageSize': 50,
+        if (pageToken != null) 'pageToken': pageToken,
+      });
+      final rows = (result.data['members'] as List<dynamic>? ?? const [])
+          .whereType<Map<Object?, Object?>>();
+      members.addAll(rows.map((row) =>
+          MemberDirectoryEntry.fromMap(Map<String, dynamic>.from(row))));
+      final next = result.data['nextPageToken'];
+      pageToken = next is String && next.isNotEmpty ? next : null;
+      if (pageToken != null && !seenTokens.add(pageToken)) {
+        throw StateError('Financial member pagination repeated a page token.');
+      }
+    } while (pageToken != null);
+    return List.unmodifiable(members);
   }
 
   Stream<List<FinancialCharge>> streamOrganizationCharges(
@@ -160,7 +258,7 @@ class FinancialRepository {
     return List.unmodifiable(charges);
   }
 
-  Future<String> getFinancialReceiptDownloadUrl({
+  Future<FinancialReceiptAccess> getFinancialReceiptAccess({
     required String organizationId,
     required String transactionId,
   }) async {
@@ -170,11 +268,7 @@ class FinancialRepository {
       'organizationId': organizationId,
       'transactionId': transactionId,
     });
-    final url = result.data['url'];
-    if (url is! String || url.isEmpty) {
-      throw StateError('Financial receipt download URL is missing.');
-    }
-    return url;
+    return FinancialReceiptAccess.fromMap(result.data);
   }
 
   Future<String> submitReceipt({
@@ -183,7 +277,6 @@ class FinancialRepository {
     required String payerMembershipId,
     required PaymentScope paymentScope,
     required int amountDeclaredBaisa,
-    required String receiptUrl,
     required String receiptStoragePath,
     required String fileName,
     required String fileType,
@@ -197,7 +290,6 @@ class FinancialRepository {
       'payerMembershipId': payerMembershipId,
       'paymentScope': paymentScope.name,
       'amountDeclaredBaisa': amountDeclaredBaisa,
-      'receiptUrl': receiptUrl,
       'receiptStoragePath': receiptStoragePath,
       'fileName': fileName,
       'fileType': fileType,

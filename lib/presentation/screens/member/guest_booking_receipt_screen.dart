@@ -11,6 +11,7 @@ import 'package:uuid/uuid.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/financial_models.dart';
 import '../../../providers/app_providers.dart';
+import '../../widgets/omr_amount.dart';
 
 class GuestBookingReceiptArguments {
   const GuestBookingReceiptArguments({
@@ -99,7 +100,6 @@ class _GuestBookingReceiptScreenState
             receiptId: receiptId,
             amountDeclaredBaisa: amount,
             balanceBeforeBaisa: balance,
-            receiptUrl: upload.url,
             receiptStoragePath: upload.fullPath,
             fileName: upload.fileName,
             fileType: upload.fileType,
@@ -111,6 +111,7 @@ class _GuestBookingReceiptScreenState
         context.pop();
       }
     } catch (error) {
+      debugPrint('[Receipts] guest submit failed type=${error.runtimeType}');
       if (uploadedPath != null) {
         await ref
             .read(financialRepositoryProvider)
@@ -119,7 +120,7 @@ class _GuestBookingReceiptScreenState
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('تعذر إرسال الإيصال: $error')),
+          const SnackBar(content: Text('تعذر إرسال الإيصال. حاول مجددًا.')),
         );
       }
     } finally {
@@ -151,10 +152,6 @@ class _GuestBookingReceiptScreenState
               return const Center(child: Text('لا يوجد رسم حجز مستحق.'));
             }
             final balance = charge['balanceBaisa'] as int? ?? 0;
-            if (_amountController.text.isEmpty && balance > 0) {
-              _amountController.text =
-                  '${balance ~/ 1000}.${(balance % 1000).toString().padLeft(3, '0')}';
-            }
             final transactionId = charge['lastTransactionId'] as String?;
             return ListView(
               padding: const EdgeInsets.all(16),
@@ -163,7 +160,7 @@ class _GuestBookingReceiptScreenState
                   child: ListTile(
                     title: Text(charge['titleArabic'] as String? ?? 'رسم حجز'),
                     subtitle: Text('الحالة: ${charge['status']}'),
-                    trailing: Text(formatBaisa(balance)),
+                    trailing: OmrAmount(amountBaisa: balance),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -171,7 +168,7 @@ class _GuestBookingReceiptScreenState
                   controller: _amountController,
                   keyboardType:
                       const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(
+                  decoration: omrAmountInputDecoration(
                     labelText: 'المبلغ المدفوع فعليًا في التحويل',
                     hintText: '0.000',
                   ),

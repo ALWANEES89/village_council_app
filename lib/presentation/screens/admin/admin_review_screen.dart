@@ -1,9 +1,14 @@
+import 'dart:async';
+import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/transaction_model.dart';
+import '../../../data/repositories/financial_repository.dart';
 import '../../../providers/app_providers.dart';
 
 class AdminReviewScreen extends ConsumerStatefulWidget {
@@ -21,13 +26,77 @@ class AdminReviewScreen extends ConsumerStatefulWidget {
 
 class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
   bool _isProcessing = false;
+  bool _isOpening = false;
   bool _completed = false;
   final _rejectionController = TextEditingController();
+  final Set<String> _temporaryReceiptPaths = {};
 
   @override
   void dispose() {
+    unawaited(_deleteTemporaryReceipts());
     _rejectionController.dispose();
     super.dispose();
+  }
+
+  Future<void> _deleteTemporaryReceipts() async {
+    for (final path in _temporaryReceiptPaths) {
+      try {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      } catch (_) {
+        // The external viewer may still hold the file; cache cleanup is best effort.
+      }
+    }
+  }
+
+  Future<void> _openReceipt(TransactionModel tx) async {
+    if (_isOpening || _isProcessing) return;
+    setState(() => _isOpening = true);
+    try {
+      final access =
+          await ref.read(financialRepositoryProvider).getFinancialReceiptAccess(
+                organizationId: tx.organizationId,
+                transactionId: tx.id,
+              );
+      switch (access) {
+        case FinancialReceiptUrlAccess(:final url):
+          if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+            throw StateError('تعذر فتح رابط الإيصال.');
+          }
+        case FinancialReceiptBytesAccess(
+            :final fileName,
+            :final contentType,
+            :final bytes,
+          ):
+          final directory = Directory(
+            '${Directory.systemTemp.path}${Platform.pathSeparator}financial_receipts',
+          );
+          await directory.create(recursive: true);
+          final safeTransactionId =
+              tx.id.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+          final file = File(
+            '${directory.path}${Platform.pathSeparator}${safeTransactionId}_$fileName',
+          );
+          await file.writeAsBytes(bytes, flush: true);
+          _temporaryReceiptPaths.add(file.path);
+          final result = await OpenFilex.open(file.path, type: contentType);
+          if (result.type != ResultType.done) {
+            throw StateError(result.message);
+          }
+      }
+    } catch (error) {
+      debugPrint('[Receipts] secure open failed type=${error.runtimeType}');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('تعذر فتح الإيصال. تحقق من الصلاحية والملف.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isOpening = false);
+    }
   }
 
   Future<void> _approve(TransactionModel tx) async {
@@ -161,6 +230,8 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
             return _ReviewContent(
               tx: tx,
               isProcessing: _isProcessing,
+              isOpening: _isOpening,
+              onOpen: () => _openReceipt(tx),
               onApprove: () => _approve(tx),
               onReject: () => _reject(tx),
             );
@@ -174,12 +245,16 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
 class _ReviewContent extends StatelessWidget {
   final TransactionModel tx;
   final bool isProcessing;
+  final bool isOpening;
+  final VoidCallback onOpen;
   final VoidCallback onApprove;
   final VoidCallback onReject;
 
   const _ReviewContent({
     required this.tx,
     required this.isProcessing,
+    required this.isOpening,
+    required this.onOpen,
     required this.onApprove,
     required this.onReject,
   });
@@ -204,46 +279,19 @@ class _ReviewContent extends StatelessWidget {
                   fontSize: 16,
                   color: AppColors.textDark)),
           const SizedBox(height: 12),
-          if (tx.receiptUrl.isNotEmpty)
-            GestureDetector(
-              // معطّل أثناء المعالجة: لا يُفتح العارض لحظة الرفض/الاعتماد،
-              // منعًا لسباق تفكيك الشجرة (crash `_dependents.isEmpty`).
-              onTap: isProcessing
-                  ? null
-                  : () => _showFullImage(context, tx.receiptUrl),
-              child: Container(
-                height: 280,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.grey.shade300),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
-                  child: Image.network(
-                    tx.receiptUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(
-                      color: Colors.grey.shade100,
-                      child: const Center(
-                          child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.picture_as_pdf,
-                              color: Colors.red, size: 48),
-                          SizedBox(height: 8),
-                          Text('ملف PDF - اضغط لفتحه'),
-                        ],
-                      )),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          const SizedBox(height: 8),
           Center(
-            child: Text('اضغط على الصورة للتكبير',
-                style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+            child: OutlinedButton.icon(
+              onPressed: isProcessing || isOpening ? null : onOpen,
+              icon: isOpening
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.open_in_new),
+              label:
+                  Text(isOpening ? 'جارٍ فتح الإيصال...' : 'فتح الإيصال بأمان'),
+            ),
           ),
           const SizedBox(height: 32),
           if (isProcessing)
@@ -287,18 +335,6 @@ class _ReviewContent extends StatelessWidget {
               ],
             ),
         ],
-      ),
-    );
-  }
-
-  void _showFullImage(BuildContext context, String url) {
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        backgroundColor: Colors.black,
-        child: InteractiveViewer(
-          child: Image.network(url),
-        ),
       ),
     );
   }

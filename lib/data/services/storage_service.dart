@@ -1,17 +1,14 @@
 import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 
 class StorageUploadResult {
   const StorageUploadResult({
-    required this.url,
     required this.fullPath,
     required this.fileName,
     required this.fileType,
     required this.fileSize,
   });
 
-  final String url;
   final String fullPath;
   final String fileName;
   final String fileType;
@@ -45,8 +42,6 @@ class StorageService {
     final ref = _storage.ref(
       'organizations/$organizationId/members/$memberId/receipts/$receiptId/$fileName',
     );
-    debugPrint('[Receipts] upload path=${ref.fullPath}');
-
     final task = ref.putFile(
       file,
       SettableMetadata(
@@ -68,7 +63,6 @@ class StorageService {
 
     await task;
     return StorageUploadResult(
-      url: await ref.getDownloadURL(),
       fullPath: ref.fullPath,
       fileName: fileName,
       fileType: fileType,

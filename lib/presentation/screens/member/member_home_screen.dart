@@ -19,6 +19,7 @@ import '../../../features/membership_request/providers/membership_request_provid
 import '../../../providers/app_providers.dart';
 import 'council_booking_screen.dart';
 import '../../widgets/notification_bell.dart';
+import '../../widgets/omr_amount.dart';
 
 class MemberHomeScreen extends ConsumerStatefulWidget {
   const MemberHomeScreen({super.key});
@@ -38,7 +39,7 @@ class _MemberHomeScreenState extends ConsumerState<MemberHomeScreen> {
     ref.invalidate(userMembershipsProvider(userId));
     ref.invalidate(activeUserMembershipsProvider(userId));
     ref.invalidate(userMembershipRequestsProvider(userId));
-    ref.invalidate(memberPaymentsProvider(userId));
+    ref.invalidate(memberPaymentsProvider);
     await Future<void>.delayed(const Duration(milliseconds: 250));
   }
 
@@ -147,9 +148,6 @@ class _MemberHomeScreenState extends ConsumerState<MemberHomeScreen> {
           userId: membership.userId,
           paymentId: payment?.id,
           periodLabel: payment?.periodLabel ?? 'إيصال دفع عام',
-          amountDeclaredBaisa: payment == null
-              ? null
-              : baisaFrom(null, legacyRialValue: payment.amount),
         ),
       );
     }
@@ -233,17 +231,22 @@ class _MemberHomeScreenState extends ConsumerState<MemberHomeScreen> {
     final profileAsync = ref.watch(userProfileProvider(user.uid));
     final membershipsAsync = ref.watch(activeUserMembershipsProvider(user.uid));
     final requestsAsync = ref.watch(userMembershipRequestsProvider(user.uid));
-    final paymentsAsync = ref.watch(memberPaymentsProvider(user.uid));
     final adminAccessAsync = ref.watch(adminAccessProvider);
 
     final member = memberAsync.asData?.value;
     final profile = profileAsync.asData?.value;
     final memberships = _visibleMemberships(user.uid, membershipsAsync);
     final requests = requestsAsync.asData?.value ?? const [];
-    final payments = paymentsAsync.asData?.value ?? const [];
     final active = memberships
         .where((item) => item.status == MembershipStatus.active)
         .toList();
+    final paymentsAsync = active.length == 1
+        ? ref.watch(memberPaymentsProvider((
+            organizationId: active.single.organizationId,
+            membershipId: user.uid,
+          )))
+        : null;
+    final payments = paymentsAsync?.asData?.value ?? const [];
     final pending = requests
         .where((item) => item.status == MembershipRequestStatus.pending)
         .toList();
@@ -307,12 +310,18 @@ class _MemberHomeScreenState extends ConsumerState<MemberHomeScreen> {
                   onRentCouncil: () => _openCouncilBooking(active),
                 ),
                 const SizedBox(height: 18),
-                _AccountSummaryCard(
-                  payments: payments,
-                  loading: paymentsAsync.isLoading,
-                  unavailable: paymentsAsync.hasError,
-                  onOpenHistory: () => _openPaymentHistory(active),
-                ),
+                if (active.length == 1)
+                  _AccountSummaryCard(
+                    payments: payments,
+                    loading: paymentsAsync?.isLoading == true,
+                    unavailable: paymentsAsync?.hasError == true,
+                    onOpenHistory: () => _openPaymentHistory(active),
+                  )
+                else
+                  const _WarningCard(
+                    message:
+                        'اختر مجلسًا لعرض ملخص مالي مستقل دون خلط بيانات المجالس.',
+                  ),
                 const SizedBox(height: 18),
                 const _SectionTitle(title: 'الخدمات السريعة'),
                 const SizedBox(height: 10),
@@ -995,8 +1004,14 @@ class _AccountSummaryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final paid = payments.where((item) => item.status == PaymentStatus.paid);
     final due = payments.where((item) => item.status != PaymentStatus.paid);
-    final paidAmount = paid.fold<double>(0, (sum, item) => sum + item.amount);
-    final remaining = due.fold<double>(0, (sum, item) => sum + item.amount);
+    final paidAmountBaisa = paid.fold<int>(
+      0,
+      (sum, item) => sum + (item.amount * 1000).round(),
+    );
+    final remainingBaisa = due.fold<int>(
+      0,
+      (sum, item) => sum + (item.amount * 1000).round(),
+    );
     return _SoftCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1020,11 +1035,11 @@ class _AccountSummaryCard extends StatelessWidget {
               children: [
                 _SummaryItem(
                   label: 'المبلغ المدفوع',
-                  value: paidAmount.toStringAsFixed(3),
+                  amountBaisa: paidAmountBaisa,
                 ),
                 _SummaryItem(
                   label: 'المبلغ المتبقي',
-                  value: remaining.toStringAsFixed(3),
+                  amountBaisa: remainingBaisa,
                 ),
               ],
             ),
@@ -1051,24 +1066,39 @@ class _AccountSummaryCard extends StatelessWidget {
 }
 
 class _SummaryItem extends StatelessWidget {
-  const _SummaryItem({required this.label, required this.value});
+  const _SummaryItem({
+    required this.label,
+    this.value,
+    this.amountBaisa,
+  }) : assert(value != null || amountBaisa != null);
 
   final String label;
-  final String value;
+  final String? value;
+  final int? amountBaisa;
 
   @override
   Widget build(BuildContext context) {
     return Expanded(
       child: Column(
         children: [
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 19,
-              fontWeight: FontWeight.bold,
-              color: AppColors.primaryDark,
+          if (amountBaisa != null)
+            OmrAmount(
+              amountBaisa: amountBaisa!,
+              style: const TextStyle(
+                fontSize: 19,
+                fontWeight: FontWeight.bold,
+                color: AppColors.primaryDark,
+              ),
+            )
+          else
+            Text(
+              value!,
+              style: const TextStyle(
+                fontSize: 19,
+                fontWeight: FontWeight.bold,
+                color: AppColors.primaryDark,
+              ),
             ),
-          ),
           const SizedBox(height: 3),
           Text(
             label,

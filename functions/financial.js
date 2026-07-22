@@ -12,12 +12,25 @@ const {
   searchPrefixes,
   subscriptionPeriod,
 } = require("./financial_core");
+const {
+  formatOmaniRialForSystemNotification,
+} = require("./omr_currency");
 
 const db = () => admin.firestore();
 const timestamp = () => Timestamp.now();
 const payableChargePageSize = 50;
 const payableChargeTokenVersion = 1;
 const financialNotificationOutbox = "financial_notification_outbox";
+const approvedReceiptEmulatorProjectId = "demo-financial-prestaging";
+const receiptDownloadMaxBytes = 10 * 1024 * 1024;
+const receiptContentTypes = new Map([
+  ["application/pdf", ".pdf"],
+  ["image/jpeg", ".jpg"],
+  ["image/png", ".png"],
+  ["image/webp", ".webp"],
+]);
+const financialMemberPageSize = 50;
+const financialMemberPageTokenVersion = 1;
 
 async function membershipForUser(organizationId, userId) {
   const organization = db().collection("organizations").doc(organizationId);
@@ -90,16 +103,57 @@ function requireString(value, name, max = 500) {
 
 function requireBaisa(value, name) {
   if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new HttpsError("invalid-argument", `${name} must be a positive integer in baisa.`);
+    throw new HttpsError("invalid-argument", "Invalid monetary amount.");
   }
   return value;
 }
 
 function requireNonNegativeBaisa(value, name) {
   if (!Number.isSafeInteger(value) || value < 0) {
-    throw new HttpsError("invalid-argument", `${name} must be a non-negative integer in baisa.`);
+    throw new HttpsError("invalid-argument", "Invalid monetary amount.");
   }
   return value;
+}
+
+function serverReceiptReference(storagePath, bucket = admin.storage().bucket()) {
+  const bucketName = bucket && typeof bucket.name === "string" ? bucket.name.trim() : "";
+  if (!bucketName || bucketName.includes("/") || bucketName.includes("?")) {
+    throw new HttpsError("internal", "The receipt Storage bucket is not configured.");
+  }
+  return `gs://${bucketName}/${storagePath}`;
+}
+
+function financialRateLimitId(operation, userId) {
+  return `${operation}_${Buffer.from(userId, "utf8").toString("base64url")}`;
+}
+
+async function consumeFinancialRateLimitInTransaction(transaction, organization, userId, operation,
+  { maxCount, windowMs }) {
+  const reference = organization.collection("financial_rate_limits")
+    .doc(financialRateLimitId(operation, userId));
+  const snapshot = await transaction.get(reference);
+  const nowDate = new Date();
+  const cutoff = new Date(nowDate.getTime() - windowMs);
+  const windowStartedAt = snapshot.exists ? snapshot.get("windowStartedAt") : null;
+  const inWindow = Boolean(windowStartedAt && typeof windowStartedAt.toDate === "function" &&
+    windowStartedAt.toDate() > cutoff);
+  const currentCount = inWindow ? Number(snapshot.get("count") || 0) : 0;
+  if (!Number.isSafeInteger(currentCount) || currentCount < 0 || currentCount >= maxCount) {
+    throw new HttpsError("resource-exhausted", "Financial operation limit reached. Try again later.");
+  }
+  const now = timestamp();
+  transaction.set(reference, {
+    userId,
+    operation,
+    windowStartedAt: inWindow ? windowStartedAt : now,
+    count: currentCount + 1,
+    updatedAt: now,
+  });
+}
+
+async function consumeFinancialRateLimit(organization, userId, operation, options) {
+  return db().runTransaction((transaction) =>
+    consumeFinancialRateLimitInTransaction(transaction, organization, userId, operation, options));
 }
 
 function setAudit(transaction, organization, requestId, actorUserId, action, targetType, targetId, changes) {
@@ -119,8 +173,9 @@ function setAudit(transaction, organization, requestId, actorUserId, action, tar
   });
 }
 
-function notification(userId, organizationId, id, title, body, type, transactionId, actorId, relatedEntityType = "receipt") {
-  return {
+function notification(userId, organizationId, id, title, body, type, transactionId, actorId,
+  relatedEntityType = "receipt", money = null) {
+  const payload = {
     notificationId: id,
     title,
     body,
@@ -134,6 +189,17 @@ function notification(userId, organizationId, id, title, body, type, transaction
     readAt: null,
     createdByUserId: actorId,
   };
+  if (money && Number.isSafeInteger(money.amountBaisa) && money.currencyCode === "OMR" &&
+      typeof money.bodyTemplate === "string" && money.bodyTemplate.includes("{amount}")) {
+    payload.amountBaisa = money.amountBaisa;
+    payload.currencyCode = "OMR";
+    payload.bodyTemplate = money.bodyTemplate;
+    payload.body = money.bodyTemplate.replaceAll(
+      "{amount}",
+      formatOmaniRialForSystemNotification(money.amountBaisa)
+    ).replaceAll("ر.ع..", "ر.ع.");
+  }
+  return payload;
 }
 
 function financialNotificationOutboxId(userId, notificationId) {
@@ -823,7 +889,12 @@ async function searchCouncilMembersHandler(request) {
   const normalized = normalizeArabic(requireString(request.data.query, "query", 100));
   if (normalized.length < 3) throw new HttpsError("invalid-argument", "Search requires at least three normalized characters.");
   await requireActiveMembership(organizationId, userId);
-  const snapshot = await db().collection("organizations").doc(organizationId)
+  const organization = db().collection("organizations").doc(organizationId);
+  await consumeFinancialRateLimit(organization, userId, "member_search", {
+    maxCount: 30,
+    windowMs: 60 * 1000,
+  });
+  const snapshot = await organization
     .collection("member_directory")
     .where("active", "==", true)
     .where("searchPrefixes", "array-contains", normalized)
@@ -844,15 +915,52 @@ async function searchCouncilMembersHandler(request) {
 }
 exports.searchCouncilMembers = onCall({ region: "us-central1" }, searchCouncilMembersHandler);
 
-exports.listFinancialMembers = onCall({ region: "us-central1" }, async (request) => {
+function encodeFinancialMemberPageToken(organizationId, fullName, documentId) {
+  return Buffer.from(JSON.stringify({
+    version: financialMemberPageTokenVersion,
+    organizationId,
+    fullName,
+    documentId,
+  }), "utf8").toString("base64url");
+}
+
+function decodeFinancialMemberPageToken(value, organizationId) {
+  if (value == null) return null;
+  if (typeof value !== "string" || value.length < 1 || value.length > 4096) {
+    throw new HttpsError("invalid-argument", "Financial member page token is invalid.");
+  }
+  try {
+    const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+    if (decoded.version !== financialMemberPageTokenVersion || decoded.organizationId !== organizationId ||
+        typeof decoded.fullName !== "string" || decoded.fullName.length > 500 ||
+        typeof decoded.documentId !== "string" || !decoded.documentId || decoded.documentId.length > 128) {
+      throw new Error("invalid token payload");
+    }
+    return decoded;
+  } catch (_) {
+    throw new HttpsError("invalid-argument", "Financial member page token is invalid.");
+  }
+}
+
+async function listFinancialMembersHandler(request) {
   const userId = requireAuth(request);
   const organizationId = requireString(request.data.organizationId, "organizationId", 128);
   await requireReviewer(organizationId, userId);
-  const snapshot = await db().collection("organizations").doc(organizationId)
+  const requestedPageSize = request.data.pageSize == null ? financialMemberPageSize : request.data.pageSize;
+  if (!Number.isSafeInteger(requestedPageSize) || requestedPageSize < 1 || requestedPageSize > financialMemberPageSize) {
+    throw new HttpsError("invalid-argument", `pageSize must be between 1 and ${financialMemberPageSize}.`);
+  }
+  const cursor = decodeFinancialMemberPageToken(request.data.pageToken, organizationId);
+  let memberQuery = db().collection("organizations").doc(organizationId)
     .collection("member_directory").where("active", "==", true)
-    .orderBy("fullName").limit(50).get();
+    .orderBy("fullName").orderBy(FieldPath.documentId()).limit(requestedPageSize + 1);
+  if (cursor) memberQuery = memberQuery.startAfter(cursor.fullName, cursor.documentId);
+  const snapshot = await memberQuery.get();
+  const hasMore = snapshot.docs.length > requestedPageSize;
+  const documents = snapshot.docs.slice(0, requestedPageSize);
+  const last = documents.at(-1);
   return {
-    members: snapshot.docs.map((doc) => {
+    members: documents.map((doc) => {
       const data = doc.data();
       return {
         membershipId: doc.id,
@@ -862,8 +970,12 @@ exports.listFinancialMembers = onCall({ region: "us-central1" }, async (request)
         photoUrl: data.photoUrl || null,
       };
     }),
+    nextPageToken: hasMore && last
+      ? encodeFinancialMemberPageToken(organizationId, String(last.get("fullName") || ""), last.id)
+      : null,
   };
-});
+}
+exports.listFinancialMembers = onCall({ region: "us-central1" }, listFinancialMembersHandler);
 
 async function getPayableChargesHandler(request) {
   const userId = requireAuth(request);
@@ -929,6 +1041,16 @@ async function getPayableChargesHandler(request) {
     });
     });
   });
+  const now = Date.now();
+  const lockSnapshots = await Promise.all(charges.map((charge) => organization
+    .collection("pending_receipt_locks").doc(`${userId}_${charge.chargeId}`).get()));
+  charges.forEach((charge, index) => {
+    const lock = lockSnapshots[index];
+    const expiresAt = lock.exists && lock.get("expiresAt");
+    const hasPendingReceipt = Boolean(expiresAt && expiresAt.toMillis() > now);
+    charge.hasPendingReceipt = hasPendingReceipt;
+    charge.pendingTransactionId = hasPendingReceipt ? String(lock.get("transactionId") || "") : null;
+  });
   const hasMore = uniqueMembershipIds.some((membershipId) => nextCursors[membershipId] !== null);
   return {
     charges,
@@ -972,14 +1094,15 @@ async function submitGuestBookingReceiptHandler(request) {
   const receiptId = requireString(request.data.receiptId, "receiptId", 128);
   const amountDeclaredBaisa = requireBaisa(request.data.amountDeclaredBaisa, "amountDeclaredBaisa");
   const balanceBeforeBaisa = requireBaisa(request.data.balanceBeforeBaisa, "balanceBeforeBaisa");
-  const receiptUrl = requireString(request.data.receiptUrl, "receiptUrl", 2048);
   const receiptStoragePath = requireString(request.data.receiptStoragePath, "receiptStoragePath", 1024);
   const fileName = requireString(request.data.fileName, "fileName", 255);
-  const fileType = requireString(request.data.fileType, "fileType", 100);
+  const fileType = requireString(request.data.fileType, "fileType", 100).toLowerCase();
   const identity = receiptStorageIdentity(receiptStoragePath);
   if (!identity || identity.organizationId !== organizationId || identity.userId !== payerUserId || identity.receiptId !== receiptId) {
     throw new HttpsError("permission-denied", "Receipt path ownership mismatch.");
   }
+  validateReceiptFileName(fileName, receiptStoragePath, fileType);
+  const receiptUrl = serverReceiptReference(receiptStoragePath);
   const organization = db().collection("organizations").doc(organizationId);
   const bookingRef = organization.collection("bookings").doc(bookingId);
   const chargeRef = organization.collection("charges").doc(chargeId);
@@ -1009,6 +1132,13 @@ async function submitGuestBookingReceiptHandler(request) {
     }
     const lockRef = organization.collection("pending_receipt_locks").doc(`${payerUserId}_${chargeId}`);
     const lock = await transaction.get(lockRef);
+    await consumeFinancialRateLimitInTransaction(
+      transaction,
+      organization,
+      payerUserId,
+      "guest_receipt",
+      { maxCount: 10, windowMs: 60 * 60 * 1000 }
+    );
     const nowDate = new Date();
     if (lock.exists && lock.get("expiresAt") && lock.get("expiresAt").toDate() > nowDate) {
       throw new HttpsError("already-exists", "A receipt for this charge is already pending.");
@@ -1034,10 +1164,20 @@ async function submitGuestBookingReceiptHandler(request) {
     });
     enqueueFinancialNotification(transaction, organization,
       notification(payerUserId, organizationId, `receiptReceived_${receiptId}`, "تم إرسال الإيصال",
-        "إيصال الحجز قيد المراجعة.", "receiptReceived", receiptId, payerUserId));
+        `إيصال الحجز بقيمة ${formatOmaniRialForSystemNotification(amountDeclaredBaisa)} قيد المراجعة.`,
+        "receiptReceived", receiptId, payerUserId, "receipt", {
+          amountBaisa: amountDeclaredBaisa,
+          currencyCode: "OMR",
+          bodyTemplate: "إيصال الحجز بقيمة {amount} قيد المراجعة.",
+        }));
     reviewerUserIds.forEach((reviewerId) => enqueueFinancialNotification(transaction, organization,
       notification(reviewerId, organizationId, `receiptSubmitted_${receiptId}`, "إيصال حجز للمراجعة",
-        "يوجد إيصال حجز جديد للمراجعة.", "receiptSubmitted", receiptId, payerUserId)));
+        `يوجد إيصال حجز بقيمة ${formatOmaniRialForSystemNotification(amountDeclaredBaisa)} للمراجعة.`,
+        "receiptSubmitted", receiptId, payerUserId, "receipt", {
+          amountBaisa: amountDeclaredBaisa,
+          currencyCode: "OMR",
+          bodyTemplate: "يوجد إيصال حجز بقيمة {amount} للمراجعة.",
+        })));
     return { idempotent: false };
   });
   return { transactionId: receiptId, idempotent: result.idempotent };
@@ -1051,16 +1191,17 @@ async function submitFinancialReceiptHandler(request) {
   const paymentScope = requireString(request.data.paymentScope, "paymentScope", 20);
   if (!["self", "others", "mixed"].includes(paymentScope)) throw new HttpsError("invalid-argument", "Invalid payment scope.");
   const amountDeclaredBaisa = requireBaisa(request.data.amountDeclaredBaisa, "amountDeclaredBaisa");
-  const receiptUrl = requireString(request.data.receiptUrl, "receiptUrl", 2048);
   const receiptStoragePath = requireString(request.data.receiptStoragePath, "receiptStoragePath", 1024);
   const fileName = requireString(request.data.fileName, "fileName", 255);
-  const fileType = requireString(request.data.fileType, "fileType", 100);
+  const fileType = requireString(request.data.fileType, "fileType", 100).toLowerCase();
   const receiptId = requireString(request.data.receiptId, "receiptId", 128);
   const storageIdentity = receiptStorageIdentity(receiptStoragePath);
   if (!storageIdentity || storageIdentity.organizationId !== organizationId ||
       storageIdentity.userId !== payerUserId || storageIdentity.receiptId !== receiptId) {
     throw new HttpsError("permission-denied", "Receipt storage path does not belong to the payer.");
   }
+  validateReceiptFileName(fileName, receiptStoragePath, fileType);
+  const receiptUrl = serverReceiptReference(receiptStoragePath);
   const rawAllocations = request.data.allocations;
   if (!Array.isArray(rawAllocations) || rawAllocations.length < 1 || rawAllocations.length > 100) {
     throw new HttpsError("invalid-argument", "Receipt allocations are required.");
@@ -1199,11 +1340,20 @@ async function submitFinancialReceiptHandler(request) {
     });
     enqueueFinancialNotification(transaction, organization,
       notification(payerUserId, organizationId, `receiptReceived_${transactionRef.id}`, "تم إرسال الإيصال",
-        "إيصال التحويل قيد مراجعة المسؤول المالي.", "receiptReceived", transactionRef.id, payerUserId));
+        `إيصال التحويل بقيمة ${formatOmaniRialForSystemNotification(amountDeclaredBaisa)} قيد مراجعة المسؤول المالي.`,
+        "receiptReceived", transactionRef.id, payerUserId, "receipt", {
+          amountBaisa: amountDeclaredBaisa,
+          currencyCode: "OMR",
+          bodyTemplate: "إيصال التحويل بقيمة {amount} قيد مراجعة المسؤول المالي.",
+        }));
     reviewerUserIds.forEach((reviewerId) => enqueueFinancialNotification(transaction, organization,
       notification(reviewerId, organizationId, `receiptSubmitted_${transactionRef.id}`, "إيصال جديد للمراجعة",
-        `أرسل ${profile.fullName || "عضو"} إيصالًا بقيمة ${amountDeclaredBaisa} بيسة.`,
-        "receiptSubmitted", transactionRef.id, payerUserId)));
+        `أرسل ${profile.fullName || "عضو"} إيصالًا بقيمة ${formatOmaniRialForSystemNotification(amountDeclaredBaisa)}.`,
+        "receiptSubmitted", transactionRef.id, payerUserId, "receipt", {
+          amountBaisa: amountDeclaredBaisa,
+          currencyCode: "OMR",
+          bodyTemplate: `أرسل ${profile.fullName || "عضو"} إيصالًا بقيمة {amount}.`,
+        })));
     return { alreadyExists: false, allocations: verified };
   });
 
@@ -1299,17 +1449,31 @@ async function reviewFinancialReceiptHandler(request) {
     enqueueFinancialNotification(transaction, organization,
       notification(data.payerUserId, organizationId, `receipt_${decision}_${transactionId}`,
         payerTitle, payerBody, decision === "approve" ? "receiptApproved" : "receiptRejected",
-        transactionId, reviewerId));
+        transactionId, reviewerId, "receipt", {
+          amountBaisa: data.amountDeclaredBaisa,
+          currencyCode: "OMR",
+          bodyTemplate: decision === "approve"
+            ? "تم اعتماد وتوزيع مبلغ {amount} على الرسوم المحددة بنجاح."
+            : `رُفض إيصال بقيمة {amount}. سبب الرفض: ${rejectionReason}`,
+        }));
     if (decision === "approve") {
       const beneficiaries = new Map();
       allocations.forEach((item) => {
         if (item.beneficiaryUserId !== data.payerUserId) {
-          beneficiaries.set(item.beneficiaryUserId, item.beneficiaryName);
+          beneficiaries.set(
+            item.beneficiaryUserId,
+            (beneficiaries.get(item.beneficiaryUserId) || 0) + item.amountAllocatedBaisa
+          );
         }
       });
-      beneficiaries.forEach((_, beneficiaryUserId) => enqueueFinancialNotification(transaction, organization,
+      beneficiaries.forEach((amountBaisa, beneficiaryUserId) => enqueueFinancialNotification(transaction, organization,
         notification(beneficiaryUserId, organizationId, `paidForYou_${transactionId}`, "تم الدفع عنك",
-          `تم اعتماد دفعة عنك بواسطة: ${data.payerName}`, "paidForYou", transactionId, reviewerId)));
+          `تم اعتماد دفعة بقيمة ${formatOmaniRialForSystemNotification(amountBaisa)} عنك بواسطة: ${data.payerName}`,
+          "paidForYou", transactionId, reviewerId, "receipt", {
+            amountBaisa,
+            currencyCode: "OMR",
+            bodyTemplate: `تم اعتماد دفعة بقيمة {amount} عنك بواسطة: ${data.payerName}`,
+          })));
     }
     return { payerUserId: data.payerUserId, payerName: data.payerName, allocations };
   });
@@ -1367,6 +1531,80 @@ async function createFinancialReceiptDownloadUrl(storagePath) {
   return url;
 }
 
+function receiptDownloadRuntime(environment = process.env) {
+  if (environment.FUNCTIONS_EMULATOR !== "true") return "production";
+  const projectId = environment.GCLOUD_PROJECT || environment.GOOGLE_CLOUD_PROJECT;
+  if (projectId !== approvedReceiptEmulatorProjectId) {
+    throw new HttpsError(
+      "failed-precondition",
+      `Receipt Emulator access is restricted to ${approvedReceiptEmulatorProjectId}.`
+    );
+  }
+  return "emulator";
+}
+
+function validateReceiptFileName(fileName, storagePath, contentType) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/.test(fileName) ||
+      storagePath.split("/").at(-1) !== fileName) {
+    throw new HttpsError("failed-precondition", "Receipt file name is invalid.");
+  }
+  const expectedExtension = receiptContentTypes.get(contentType);
+  if (!expectedExtension) {
+    throw new HttpsError("failed-precondition", "Receipt content type is not allowed.");
+  }
+  const lowerName = fileName.toLowerCase();
+  const extensionMatches = contentType === "image/jpeg"
+    ? lowerName.endsWith(".jpg") || lowerName.endsWith(".jpeg")
+    : Boolean(expectedExtension && lowerName.endsWith(expectedExtension));
+  if (!extensionMatches) {
+    throw new HttpsError("failed-precondition", "Receipt file extension does not match its content type.");
+  }
+}
+
+function receiptBytesMatchContentType(bytes, contentType) {
+  if (contentType === "application/pdf") return bytes.subarray(0, 5).toString("ascii") === "%PDF-";
+  if (contentType === "image/jpeg") return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if (contentType === "image/png") {
+    return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  }
+  if (contentType === "image/webp") {
+    return bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" &&
+      bytes.subarray(8, 12).toString("ascii") === "WEBP";
+  }
+  return false;
+}
+
+async function readFinancialReceiptFromEmulator(storagePath, expectedFileName, expectedContentType, options = {}) {
+  if (!receiptContentTypes.has(expectedContentType)) {
+    throw new HttpsError("failed-precondition", "Receipt content type is not allowed.");
+  }
+  validateReceiptFileName(expectedFileName, storagePath, expectedContentType);
+  const file = (options.bucket || admin.storage().bucket()).file(storagePath);
+  let metadata;
+  try {
+    [metadata] = await file.getMetadata();
+  } catch (error) {
+    if (error && (error.code === 404 || error.code === "storage/object-not-found")) {
+      throw new HttpsError("not-found", "Receipt file not found.");
+    }
+    throw error;
+  }
+  const sizeBytes = Number(metadata.size);
+  const contentType = String(metadata.contentType || "").toLowerCase();
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0 || sizeBytes > receiptDownloadMaxBytes) {
+    throw new HttpsError("failed-precondition", "Receipt file size is invalid.");
+  }
+  if (!receiptContentTypes.has(contentType) || contentType !== expectedContentType) {
+    throw new HttpsError("failed-precondition", "Receipt content type does not match the transaction.");
+  }
+  const [bytes] = await file.download();
+  if (bytes.length !== sizeBytes || bytes.length > receiptDownloadMaxBytes ||
+      !receiptBytesMatchContentType(bytes, contentType)) {
+    throw new HttpsError("failed-precondition", "Receipt file content is invalid.");
+  }
+  return { bytesBase64: bytes.toString("base64"), sizeBytes, contentType, fileName: expectedFileName };
+}
+
 async function getFinancialReceiptDownloadUrlHandler(request, options = {}) {
   const requesterUserId = requireAuth(request);
   const organizationId = requireString(request.data.organizationId, "organizationId", 128);
@@ -1385,10 +1623,23 @@ async function getFinancialReceiptDownloadUrlHandler(request, options = {}) {
       identity.userId !== receipt.get("payerUserId")) {
     throw new HttpsError("failed-precondition", "Receipt storage identity is invalid.");
   }
+  const fileName = requireString(receipt.get("fileName"), "fileName", 255);
+  const contentType = requireString(receipt.get("fileType"), "fileType", 100).toLowerCase();
+  const runtime = receiptDownloadRuntime(options.environment || process.env);
+  if (runtime === "emulator") {
+    const readReceiptFile = options.readReceiptFile || readFinancialReceiptFromEmulator;
+    return {
+      kind: "bytes",
+      ...(await readReceiptFile(storagePath, fileName, contentType, options)),
+    };
+  }
   const createDownloadUrl = options.createDownloadUrl || createFinancialReceiptDownloadUrl;
   return {
+    kind: "url",
     url: await createDownloadUrl(storagePath),
     expiresInSeconds: 300,
+    fileName,
+    contentType,
   };
 }
 
@@ -1575,15 +1826,25 @@ exports._test = {
   deliverFinancialNotificationOutboxHandler,
   ensureSubscriptionCharge,
   generateSubscriptionChargesHandler,
+  getBookingAvailabilityHandler,
   getFinancialReceiptDownloadUrlHandler,
   getGuestBookingChargeHandler,
   getPayableChargesHandler,
+  listFinancialMembersHandler,
   markFinancialChargesOverdueHandler,
+  notification,
   receiptIsLinked,
+  receiptBytesMatchContentType,
+  receiptDownloadRuntime,
+  readFinancialReceiptFromEmulator,
+  requireBaisa,
+  requireNonNegativeBaisa,
   requestBookingCancellationHandler,
   reviewFinancialReceiptHandler,
   reviewBookingCancellationHandler,
   searchCouncilMembersHandler,
+  financialRateLimitId,
+  serverReceiptReference,
   submitGuestBookingReceiptHandler,
   submitFinancialReceiptHandler,
 };
