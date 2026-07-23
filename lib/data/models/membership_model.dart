@@ -24,7 +24,7 @@ class MembershipModel {
   final String? approvedBy;
   final DateTime? approvedAt;
   final bool isPrimary;
-  // المالك الأساسي للنظام (محمي من التعديل/الحذف إلا من system_owner).
+  // المالك الأساسي للمجلس؛ system_owner منصة منفصل، مع حماية صيغة legacy.
   final bool isPrimaryOwner;
   final List<String> permissionsSnapshot;
   final String? joinedReason;
@@ -53,9 +53,8 @@ class MembershipModel {
   // هل هذه العضوية هي المالك الأساسي للنظام؟ (لا تعتمد على memberNumber).
   bool get isOwnerMembership =>
       isPrimaryOwner ||
-      roleId == 'system_owner' ||
-      role == 'owner' ||
-      role == 'system_owner';
+      const {'owner', 'council_owner', 'system_owner'}.contains(roleId) ||
+      const {'owner', 'council_owner', 'system_owner'}.contains(role);
 
   factory MembershipModel.fromFirestore(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;

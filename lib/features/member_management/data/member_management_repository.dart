@@ -2,7 +2,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../../data/models/membership_model.dart';
-import '../../../data/repositories/notification_repository.dart';
 import 'member_management_models.dart';
 
 class MemberManagementRepository {
@@ -10,8 +9,6 @@ class MemberManagementRepository {
       : _firestore = firestore ?? FirebaseFirestore.instance;
 
   final FirebaseFirestore _firestore;
-  late final NotificationRepository _notifications =
-      NotificationRepository(firestore: _firestore);
 
   CollectionReference<Map<String, dynamic>> _memberships(
     String organizationId,
@@ -20,6 +17,29 @@ class MemberManagementRepository {
           .collection('organizations')
           .doc(organizationId)
           .collection('memberships');
+
+  Future<DocumentReference<Map<String, dynamic>>> _membershipForUser(
+    String organizationId,
+    String userId,
+  ) async {
+    final memberships = _memberships(organizationId);
+    final direct = await memberships.doc(userId).get();
+    if (direct.exists &&
+        (direct.data()?['userId'] == null ||
+            direct.data()?['userId'] == userId)) {
+      return direct.reference;
+    }
+    final matches =
+        await memberships.where('userId', isEqualTo: userId).limit(2).get();
+    if (matches.docs.length != 1) {
+      throw StateError(
+        matches.docs.isEmpty
+            ? 'Membership does not exist.'
+            : 'Duplicate memberships require review.',
+      );
+    }
+    return matches.docs.single.reference;
+  }
 
   CollectionReference<Map<String, dynamic>> get _history =>
       _firestore.collection('member_history');
@@ -66,7 +86,8 @@ class MemberManagementRepository {
     required String organizationId,
     required String userId,
   }) async {
-    final document = await _memberships(organizationId).doc(userId).get();
+    final reference = await _membershipForUser(organizationId, userId);
+    final document = await reference.get();
     if (!document.exists) return null;
     return _loadMember(organizationId, document);
   }
@@ -116,7 +137,8 @@ class MemberManagementRepository {
     required String newRoleId,
     required String actorUserId,
   }) async {
-    final membershipReference = _memberships(organizationId).doc(userId);
+    final membershipReference =
+        await _membershipForUser(organizationId, userId);
     debugPrint('[Members] role update path=${membershipReference.path}');
     final roleReference = _firestore
         .collection('organizations')
@@ -178,9 +200,9 @@ class MemberManagementRepository {
   bool _isPrimaryOwner(Map<String, dynamic>? data) {
     if (data == null) return false;
     return data['isPrimaryOwner'] == true ||
-        data['roleId'] == 'system_owner' ||
-        data['role'] == 'system_owner' ||
-        data['role'] == 'owner';
+        const {'owner', 'council_owner', 'system_owner'}
+            .contains(data['roleId']) ||
+        const {'owner', 'council_owner', 'system_owner'}.contains(data['role']);
   }
 
   /// نقل رئاسة المجلس: يرقّي عضواً نشطاً إلى رئيس المجلس (roleId: chairman)،
@@ -301,7 +323,7 @@ class MemberManagementRepository {
     if (newRoleId == 'system_owner') {
       throw StateError('Cannot assign system_owner from the app.');
     }
-    final reference = _memberships(organizationId).doc(userId);
+    final reference = await _membershipForUser(organizationId, userId);
     final historyReference = _history.doc();
     final sorted = permissions.toSet().toList()..sort();
     await _firestore.runTransaction((transaction) async {
@@ -353,7 +375,8 @@ class MemberManagementRepository {
     if (sourceOrganizationId == targetOrganizationId) {
       throw ArgumentError('Source and target organizations must differ.');
     }
-    final sourceReference = _memberships(sourceOrganizationId).doc(userId);
+    final sourceReference =
+        await _membershipForUser(sourceOrganizationId, userId);
     final targetReference = _memberships(targetOrganizationId).doc(userId);
     final roleReference = _firestore
         .collection('organizations')
@@ -415,20 +438,8 @@ class MemberManagementRepository {
     required String relatedEntityId,
     required String actorUserId,
   }) async {
-    try {
-      await _notifications.createForUser(
-        userId: userId,
-        organizationId: organizationId,
-        title: title,
-        body: body,
-        type: type,
-        relatedEntityType: 'membership',
-        relatedEntityId: relatedEntityId,
-        createdByUserId: actorUserId,
-      );
-    } on FirebaseException catch (error) {
-      debugPrint('[Notifications] membership event skipped: ${error.code}');
-    }
+    // Membership notifications are derived by the trusted
+    // syncMembershipAccess Cloud Function. Clients never construct payloads.
   }
 
   Future<void> remove({
@@ -437,7 +448,8 @@ class MemberManagementRepository {
     required String actorUserId,
     String? reason,
   }) async {
-    final membershipReference = _memberships(organizationId).doc(userId);
+    final membershipReference =
+        await _membershipForUser(organizationId, userId);
     debugPrint('[Members] membership removal path=${membershipReference.path}');
     final requestReference = _firestore
         .collection('organizations')
@@ -497,7 +509,8 @@ class MemberManagementRepository {
     required MembershipStatus newStatus,
     String? reason,
   }) async {
-    final membershipReference = _memberships(organizationId).doc(userId);
+    final membershipReference =
+        await _membershipForUser(organizationId, userId);
     final historyReference = _history.doc();
     await _firestore.runTransaction((transaction) async {
       final membership = await transaction.get(membershipReference);

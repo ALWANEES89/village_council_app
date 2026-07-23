@@ -81,7 +81,8 @@ class NotificationService {
     return pending;
   }
 
-  void _emitTap(Map<String, dynamic> data) => _tapController.add(_stringify(data));
+  void _emitTap(Map<String, dynamic> data) =>
+      _tapController.add(_stringify(data));
 
   Map<String, String> _stringify(Map<String, dynamic> data) =>
       data.map((key, value) => MapEntry(key, '${value ?? ''}'));
@@ -184,18 +185,4 @@ class NotificationService {
   String _channelName(String id) => kNotificationChannels
       .firstWhere((c) => c.id == id, orElse: () => kNotificationChannels.first)
       .name;
-
-  /// توافق خلفي: مسار الطابور القديم (لم يعد يُستخدم بعد onNotificationCreated).
-  Future<void> sendNotificationToMember({
-    required String fcmToken,
-    required String title,
-    required String body,
-  }) async {
-    await FirebaseFirestore.instance.collection('notifications_queue').add({
-      'token': fcmToken,
-      'title': title,
-      'body': body,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-  }
 }

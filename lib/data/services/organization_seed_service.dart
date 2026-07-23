@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 
+import '../../core/firebase/firebase_emulator_config.dart';
 import '../models/organization_model.dart';
 
 class OrganizationSeedService {
@@ -29,6 +31,11 @@ class OrganizationSeedService {
   }
 
   Future<void> ensureSeeded() {
+    if (!kDebugMode || !FirebaseEmulatorConfig.enabled) {
+      throw StateError(
+        'Organization seed is restricted to an explicit Debug Emulator run.',
+      );
+    }
     final running = _pendingSeed;
     if (running != null) return running;
     final operation = _ensureSeeded();

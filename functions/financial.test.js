@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 
 const {
   canonicalChargeKey,
@@ -25,7 +26,18 @@ const {
   receiptDownloadRuntime,
   requireBaisa,
   requireNonNegativeBaisa,
+  scheduleGate,
 } = require("./financial")._test;
+const {
+  bookingSlotIdentity,
+  isPrimaryCouncilOwner,
+  serverNotification,
+} = require("./production_security")._test;
+const { isTrustedNotification } = require("./notifications")._test;
+const {
+  parseOptions: parseInventoryOptions,
+  validateOptions: validateInventoryOptions,
+} = require("../scripts/inspect-firestore-readiness");
 
 test("Arabic normalization ignores hamza, diacritics and tatweel", () => {
   assert.equal(normalizeArabic("إِبْــرَاهِيم"), normalizeArabic("ابراهيم"));
@@ -123,13 +135,77 @@ test("migration money readers reject missing, negative and non-finite values", (
 test("migration apply requires project and exact explicit confirmation", async () => {
   assert.throws(() => validateOptions(parseOptions(["--apply"])), /--project/);
   assert.throws(() => validateOptions(parseOptions(["--apply", "--project", "demo"])), /--confirm/);
+  assert.throws(() => validateOptions(parseOptions([
+    "--apply", "--project", "demo", "--confirm", "APPLY:demo",
+  ])), /--manifest/);
   assert.doesNotThrow(() => validateOptions(parseOptions([
     "--apply", "--project", "demo", "--confirm", "APPLY:demo",
+    "--manifest", "migration-manifests/test.json",
   ])));
   let batches = 0;
   const fakeDb = { batch: () => { batches += 1; return { set() {}, async commit() {} }; } };
   assert.equal(await commitWrites([{ reference: {}, data: {} }], { apply: false, db: fakeDb }), 0);
   assert.equal(batches, 0, "dry-run must not create a batch or write");
+});
+
+test("production inventory is read-only gated and requires an explicit project", () => {
+  assert.throws(() => validateInventoryOptions(parseInventoryOptions([])), /--project/);
+  assert.throws(() => validateInventoryOptions(parseInventoryOptions([
+    "--project", "alrahmat-console",
+  ])), /denied by default/);
+  assert.doesNotThrow(() => validateInventoryOptions(parseInventoryOptions([
+    "--project", "demo-financial-prestaging",
+  ])));
+});
+
+test("schedule kill switches default to disabled and dry-run before writes", () => {
+  const disabled = scheduleGate("generateSubscriptionCharges", { id: "run-1" }, { environment: {} });
+  assert.deepEqual(disabled.result, {
+    status: "disabled", task: "generateSubscriptionCharges", runId: "run-1", writes: 0,
+  });
+  const dryRun = scheduleGate("generateSubscriptionCharges", { id: "run-2" }, { environment: {
+    FINANCIAL_SCHEDULES_ENABLED: "true",
+    FINANCIAL_SCHEDULE_GENERATE_SUBSCRIPTIONS_ENABLED: "true",
+  } });
+  assert.equal(dryRun.result.status, "dry-run");
+  const enabled = scheduleGate("generateSubscriptionCharges", { id: "run-3" }, { environment: {
+    FINANCIAL_SCHEDULES_ENABLED: "true",
+    FINANCIAL_SCHEDULE_GENERATE_SUBSCRIPTIONS_ENABLED: "true",
+    FINANCIAL_SCHEDULE_DRY_RUN: "false",
+  } });
+  assert.equal(enabled.execute, true);
+  assert.equal(enabled.runId, "run-3");
+});
+
+test("every sensitive financial and booking callable enforces App Check", () => {
+  const financialSource = fs.readFileSync(require.resolve("./financial"), "utf8");
+  const securitySource = fs.readFileSync(require.resolve("./production_security"), "utf8");
+  for (const source of [financialSource, securitySource]) {
+    assert.match(source, /sensitiveCallableOptions\s*=\s*\{[^}]*enforceAppCheck:\s*true/s);
+  }
+  assert.equal((financialSource.match(/onCall\(\s*sensitiveCallableOptions/g) || []).length, 16);
+  assert.equal((securitySource.match(/onCall\(\s*sensitiveCallableOptions/g) || []).length, 5);
+});
+
+test("trusted notifications require server provenance and path-bound routing", () => {
+  const payload = serverNotification({
+    userId: "member", organizationId: "o1", notificationId: "n1",
+    title: "title", body: "body", type: "bookingApproved",
+    relatedEntityType: "booking", relatedEntityId: "b1", actorUserId: "server",
+  });
+  assert.equal(isTrustedNotification(payload, { userId: "member", notificationId: "n1" }), true);
+  assert.equal(isTrustedNotification({ ...payload, userId: "other" }, { userId: "member", notificationId: "n1" }), false);
+  assert.equal(isTrustedNotification({ ...payload, deliverySource: "client" }, { userId: "member", notificationId: "n1" }), false);
+});
+
+test("booking slot keys are deterministic and council ownership roles are normalized", () => {
+  const first = bookingSlotIdentity({ dayKey: "2026-08-01", startTime: "10:00", endTime: "12:00" });
+  const second = bookingSlotIdentity({ dayKey: "2026-08-01", startTime: "10:00", endTime: "12:00" });
+  assert.equal(first.slotKey, second.slotKey);
+  assert.notEqual(first.slotKey, bookingSlotIdentity({ dayKey: "2026-08-01", startTime: "12:00", endTime: "14:00" }).slotKey);
+  assert.equal(isPrimaryCouncilOwner({ roleId: "owner" }), true);
+  assert.equal(isPrimaryCouncilOwner({ role: "council_owner" }), true);
+  assert.equal(isPrimaryCouncilOwner({ roleId: "chairman" }), false);
 });
 
 test("canonical charge keys are stable across migration and generator order", () => {

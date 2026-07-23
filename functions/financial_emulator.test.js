@@ -8,7 +8,7 @@ const {
   assertSucceeds,
   initializeTestEnvironment,
 } = require("@firebase/rules-unit-testing");
-const { collection, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc, where } = require("firebase/firestore");
+const { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc, where } = require("firebase/firestore");
 const { getBytes, ref, uploadBytes } = require("firebase/storage");
 const admin = require("firebase-admin");
 const { Timestamp } = require("firebase-admin/firestore");
@@ -44,8 +44,25 @@ const {
   submitGuestBookingReceiptHandler,
   submitFinancialReceiptHandler,
 } = require("./financial")._test;
+const {
+  bootstrapOrganizationHandler,
+  createBookingHandler,
+  repairOrganizationStructureHandler,
+  reviewBookingHandler,
+  syncMembershipAccessHandler,
+  transferPrimaryCouncilOwnershipHandler,
+} = require("./production_security")._test;
+const { onNotificationCreatedHandler } = require("./notifications")._test;
 
 let environment;
+
+function enabledScheduleEnvironment(taskKey) {
+  return {
+    FINANCIAL_SCHEDULES_ENABLED: "true",
+    [taskKey]: "true",
+    FINANCIAL_SCHEDULE_DRY_RUN: "false",
+  };
+}
 
 before(async () => {
   environment = await initializeTestEnvironment({
@@ -72,6 +89,20 @@ beforeEach(async () => {
     await setDoc(doc(db, "organizations/o1/memberships/reviewer-membership-42"), {
       organizationId: "o1", userId: "reviewer-different", status: "active",
       roleId: "financialReviewer", permissionsSnapshot: ["receipts.review"],
+    });
+    await setDoc(doc(db, "organizations/o1/member_access/reviewer-different"), {
+      organizationId: "o1", membershipId: "reviewer-membership-42",
+      userId: "reviewer-different", status: "active", roleId: "financialReviewer",
+      permissionsSnapshot: ["receipts.review"], isPrimaryOwner: false,
+    });
+    await setDoc(doc(db, "organizations/o1/memberships/legacy-owner-membership"), {
+      organizationId: "o1", userId: "legacy-owner", status: "active",
+      roleId: "owner", permissionsSnapshot: ["fullAccess"], isPrimaryOwner: false,
+    });
+    await setDoc(doc(db, "organizations/o1/member_access/legacy-owner"), {
+      organizationId: "o1", membershipId: "legacy-owner-membership",
+      userId: "legacy-owner", status: "active", roleId: "owner",
+      permissionsSnapshot: ["fullAccess"], isPrimaryOwner: true,
     });
     await setDoc(doc(db, "organizations/o1/memberships/beneficiary"), {
       organizationId: "o1", userId: "beneficiary", status: "active", roleId: "member", permissionsSnapshot: [], memberNumber: "2",
@@ -104,6 +135,13 @@ beforeEach(async () => {
       memberBookingFeeBaisa: 2500, nonMemberBookingFeeBaisa: 4000,
       eventBookingFeeBaisa: 0, receiptPaymentsEnabled: true,
       onlinePaymentsEnabled: false, onlinePaymentProvider: null,
+    });
+    await setDoc(doc(db, "organizations/o1/financial_profile/banking"), {
+      organizationId: "o1", enabled: true, bankName: "Test Bank",
+      accountName: "Private", accountNumber: "TEST-ONLY", iban: "TEST-ONLY",
+    });
+    await setDoc(doc(db, "organizations/o2/financial_profile/banking"), {
+      organizationId: "o2", enabled: true, bankName: "Other Test Bank",
     });
     for (let index = 0; index < 30; index += 1) {
       const membershipId = index === 0 ? "member" : `other-${index}`;
@@ -164,6 +202,204 @@ test("financial reviewers can list pending council receipts", async () => {
   )));
 });
 
+test("notification rules deny all client creates and permit read-state updates only", async () => {
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "users/member/notifications/server-notification"), {
+      notificationId: "server-notification", userId: "member", organizationId: "o1",
+      title: "Server title", body: "Server body", type: "bookingApproved",
+      relatedEntityType: "booking", relatedEntityId: "b1", status: "unread",
+      readAt: null, createdAt: new Date(), deliverySource: "server",
+    });
+  });
+  const memberDb = environment.authenticatedContext("member").firestore();
+  const otherDb = environment.authenticatedContext("beneficiary").firestore();
+  await assertFails(setDoc(doc(memberDb, "users/member/notifications/client-self"), {
+    notificationId: "client-self", userId: "member", organizationId: "o1",
+    title: "Injected", body: "Injected", type: "injected", status: "unread",
+  }));
+  await assertFails(setDoc(doc(memberDb, "users/beneficiary/notifications/client-other"), {
+    notificationId: "client-other", userId: "beneficiary", organizationId: "o1",
+    title: "Injected", body: "Injected", type: "injected", status: "unread",
+  }));
+  await assertSucceeds(getDoc(doc(memberDb, "users/member/notifications/server-notification")));
+  await assertFails(getDoc(doc(otherDb, "users/member/notifications/server-notification")));
+  await assertSucceeds(updateDoc(doc(memberDb, "users/member/notifications/server-notification"), {
+    status: "read", readAt: new Date(),
+  }));
+  await assertFails(updateDoc(doc(memberDb, "users/member/notifications/server-notification"), {
+    title: "Changed", status: "read", readAt: new Date(),
+  }));
+  await assertFails(updateDoc(doc(memberDb, "users/member/notifications/server-notification"), {
+    userId: "beneficiary", status: "read", readAt: new Date(),
+  }));
+});
+
+test("trusted server notification reaches FCM handler while untrusted documents are rejected", async () => {
+  const database = admin.firestore();
+  await database.doc("users/member").set({ fcmTokens: ["test-token"], notificationSettings: {} }, { merge: true });
+  const trustedRef = database.doc("users/member/notifications/trusted-handler");
+  await trustedRef.set({
+    notificationId: "trusted-handler", userId: "member", organizationId: "o1",
+    title: "Trusted", body: "Trusted body", type: "bookingApproved",
+    relatedEntityType: "booking", relatedEntityId: "b1", status: "unread",
+    deliverySource: "server", createdAt: Timestamp.now(),
+  });
+  let sends = 0;
+  const response = await onNotificationCreatedHandler({
+    params: { userId: "member", notificationId: "trusted-handler" },
+    data: await trustedRef.get(),
+  }, {
+    database,
+    messaging: { async sendEachForMulticast(message) {
+      sends += 1;
+      assert.equal(message.tokens.length, 1);
+      assert.equal(message.data.organizationId, "o1");
+      return { successCount: 1, failureCount: 0, responses: [{ success: true }] };
+    } },
+    log: { info() {}, warn() {} },
+  });
+  assert.equal(response.status, "sent");
+  assert.equal(sends, 1);
+  const untrustedRef = database.doc("users/member/notifications/untrusted-handler");
+  await untrustedRef.set({
+    notificationId: "untrusted-handler", userId: "member", organizationId: "o1",
+    title: "Untrusted", body: "body", type: "injected",
+    relatedEntityType: "booking", relatedEntityId: "b1", status: "unread",
+    deliverySource: "client",
+  });
+  const rejected = await onNotificationCreatedHandler({
+    params: { userId: "member", notificationId: "untrusted-handler" },
+    data: await untrustedRef.get(),
+  }, { database, messaging: { async sendEachForMulticast() { sends += 1; } }, log: { warn() {} } });
+  assert.equal(rejected.status, "rejected");
+  assert.equal(sends, 1);
+});
+
+test("financial profile is council-role isolated and never guest/public readable", async () => {
+  const path = "organizations/o1/financial_profile/banking";
+  await assertFails(getDoc(doc(environment.authenticatedContext("member").firestore(), path)));
+  await assertSucceeds(getDoc(doc(environment.authenticatedContext("finance").firestore(), path)));
+  await assertSucceeds(getDoc(doc(environment.authenticatedContext("legacy-owner").firestore(), path)));
+  await assertSucceeds(getDoc(doc(environment.authenticatedContext("system-owner").firestore(), path)));
+  await assertFails(getDoc(doc(environment.authenticatedContext("outsider").firestore(), path)));
+  await assertFails(getDoc(doc(environment.authenticatedContext("guest").firestore(), path)));
+  await assertFails(getDoc(doc(environment.unauthenticatedContext().firestore(), path)));
+  await assertFails(getDoc(doc(environment.authenticatedContext("finance").firestore(), "organizations/o2/financial_profile/banking")));
+});
+
+test("primary owner variants are immutable to clients while ordinary memberships remain manageable", async () => {
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "organizations/o1/memberships/flag-owner"), {
+      organizationId: "o1", userId: "flag-owner-user", status: "active",
+      roleId: "member", isPrimaryOwner: true, permissionsSnapshot: ["fullAccess"],
+    });
+    await setDoc(doc(context.firestore(), "organizations/o1/memberships/council-owner-role"), {
+      organizationId: "o1", userId: "council-owner-user", status: "active",
+      roleId: "council_owner", permissionsSnapshot: ["fullAccess"],
+    });
+  });
+  const localOwner = environment.authenticatedContext("legacy-owner").firestore();
+  const platformOwner = environment.authenticatedContext("system-owner").firestore();
+  for (const id of ["flag-owner", "council-owner-role", "legacy-owner-membership"]) {
+    await assertFails(updateDoc(doc(localOwner, `organizations/o1/memberships/${id}`), { status: "suspended" }));
+    await assertFails(updateDoc(doc(platformOwner, `organizations/o1/memberships/${id}`), { roleId: "member", isPrimaryOwner: false }));
+    await assertFails(deleteDoc(doc(platformOwner, `organizations/o1/memberships/${id}`)));
+  }
+  await assertSucceeds(updateDoc(doc(localOwner, "organizations/o1/memberships/beneficiary"), {
+    status: "suspended", updatedAt: new Date(),
+  }));
+  await assertFails(getDoc(doc(localOwner, "organizations/o1/member_access/legacy-owner")));
+});
+
+test("membership access projection supports different membership and user IDs", async () => {
+  const database = admin.firestore();
+  const membership = database.doc("organizations/o1/memberships/projection-membership-99");
+  await membership.set({
+    organizationId: "o1", userId: "projection-user", status: "active",
+    roleId: "adminManager", permissionsSnapshot: ["members.manage"],
+  });
+  await syncMembershipAccessHandler({
+    params: { organizationId: "o1", membershipId: "projection-membership-99" },
+    data: {
+      before: { exists: false },
+      after: await membership.get(),
+    },
+  });
+  const access = await database.doc("organizations/o1/member_access/projection-user").get();
+  assert.equal(access.get("membershipId"), "projection-membership-99");
+  assert.equal(access.get("userId"), "projection-user");
+  assert.equal(access.get("roleId"), "adminManager");
+  assert.deepEqual(access.get("permissionsSnapshot"), ["members.manage"]);
+});
+
+test("organization bootstrap is explicit, system-owner-only, complete and idempotent", async () => {
+  const request = {
+    auth: { uid: "system-owner" },
+    data: {
+      requestId: "bootstrap-test-request", organizationId: "bootstrap-test-org",
+      officialNameArabic: "مجلس اختبار", officialNameEnglish: "Test Council",
+      chairmanUserId: "member",
+    },
+  };
+  const first = await bootstrapOrganizationHandler(request);
+  const second = await bootstrapOrganizationHandler(request);
+  assert.equal(first.organizationId, "bootstrap-test-org");
+  assert.equal(first.idempotent, false);
+  assert.equal(second.organizationId, "bootstrap-test-org");
+  assert.equal(second.idempotent, true);
+  const database = admin.firestore();
+  assert.equal((await database.collection("organizations/bootstrap-test-org/roles").get()).size, 6);
+  assert.equal((await database.doc("organizations/bootstrap-test-org/financial_profile/banking").get()).exists, true);
+  assert.equal((await database.doc("organizations/bootstrap-test-org/settings/organization").get()).exists, true);
+  assert.equal((await database.collection("organizations/bootstrap-test-org/memberships").get()).size, 2);
+  await database.doc("organizations/bootstrap-test-org/roles/member").delete();
+  const repaired = await repairOrganizationStructureHandler({
+    auth: { uid: "system-owner" }, data: { organizationId: "bootstrap-test-org" },
+  });
+  const repairedAgain = await repairOrganizationStructureHandler({
+    auth: { uid: "system-owner" }, data: { organizationId: "bootstrap-test-org" },
+  });
+  assert.equal(repaired.createdCount, 1);
+  assert.equal(repaired.idempotent, false);
+  assert.equal(repairedAgain.createdCount, 0);
+  assert.equal(repairedAgain.idempotent, true);
+  assert.equal((await database.doc("organizations/bootstrap-test-org/roles/member").get()).exists, true);
+  await assert.rejects(repairOrganizationStructureHandler({
+    auth: { uid: "finance" }, data: { organizationId: "bootstrap-test-org" },
+  }), /Platform system owner/);
+  await assert.rejects(bootstrapOrganizationHandler({ ...request, auth: { uid: "finance" }, data: {
+    ...request.data, requestId: "bootstrap-denied", organizationId: "bootstrap-denied-org",
+  } }), /Platform system owner/);
+  await assertFails(setDoc(
+    doc(environment.authenticatedContext("system-owner").firestore(), "organizations/client-bootstrap"),
+    { organizationId: "client-bootstrap", status: "active" },
+  ));
+});
+
+test("primary ownership transfer is platform-only and atomic", async () => {
+  await assert.rejects(transferPrimaryCouncilOwnershipHandler({
+    auth: { uid: "finance" }, data: {
+      organizationId: "o1", currentMembershipId: "legacy-owner-membership",
+      targetMembershipId: "beneficiary", previousOwnerRoleId: "member",
+    },
+  }), /Platform system owner/);
+  await transferPrimaryCouncilOwnershipHandler({
+    auth: { uid: "system-owner" }, data: {
+      organizationId: "o1", currentMembershipId: "legacy-owner-membership",
+      targetMembershipId: "beneficiary", previousOwnerRoleId: "member",
+    },
+  });
+  const database = admin.firestore();
+  const [previous, target] = await Promise.all([
+    database.doc("organizations/o1/memberships/legacy-owner-membership").get(),
+    database.doc("organizations/o1/memberships/beneficiary").get(),
+  ]);
+  assert.equal(previous.get("isPrimaryOwner"), false);
+  assert.equal(previous.get("roleId"), "member");
+  assert.equal(target.get("isPrimaryOwner"), true);
+  assert.equal(target.get("roleId"), "council_owner");
+});
+
 test("booking list is owner-constrained while booking managers can review the council", async () => {
   await environment.withSecurityRulesDisabled(async (context) => {
     const database = context.firestore();
@@ -193,6 +429,87 @@ test("booking list is owner-constrained while booking managers can review the co
   assert.equal(review.size, 2);
   const outsiderDb = environment.authenticatedContext("outsider").firestore();
   await assertFails(getDocs(collection(outsiderDb, "organizations/o1/bookings")));
+});
+
+test("atomic booking slot allows exactly one concurrent create and releases on pending cancellation", async () => {
+  const database = admin.firestore();
+  const request = (userId, membershipId, bookingId) => ({
+    auth: { uid: userId },
+    data: {
+      organizationId: "o1", membershipId, bookingId,
+      requesterName: `Test ${userId}`, requesterPhone: "00000000",
+      bookingDate: "2026-10-15", startTime: "10:00", endTime: "12:00",
+      occasionType: "QA", notes: "Synthetic Emulator data",
+    },
+  });
+  const results = await Promise.allSettled([
+    createBookingHandler(request("member", "member", "concurrent-create-a")),
+    createBookingHandler(request("beneficiary", "beneficiary", "concurrent-create-b")),
+  ]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+  const bookings = await database.collection("organizations/o1/bookings")
+    .where("bookingDay", "==", "2026-10-15").get();
+  assert.equal(bookings.size, 1);
+  const slots = await database.collection("organizations/o1/booking_slots").get();
+  assert.equal(slots.size, 1);
+  const winner = bookings.docs[0];
+  await requestBookingCancellationHandler({
+    auth: { uid: winner.get("userId") },
+    data: { organizationId: "o1", bookingId: winner.id, reason: "QA release" },
+  });
+  assert.equal((await database.collection("organizations/o1/booking_slots").get()).size, 0);
+  const retryUser = winner.get("userId") === "member" ? "beneficiary" : "member";
+  const retryMembership = retryUser;
+  const retry = await createBookingHandler(request(retryUser, retryMembership, "concurrent-create-retry"));
+  assert.equal(retry.status, "pending");
+});
+
+test("new booking rejects an active legacy booking that has no slot lock", async () => {
+  const database = admin.firestore();
+  await database.doc("organizations/o1/bookings/legacy-active-without-lock").set({
+    bookingId: "legacy-active-without-lock", organizationId: "o1",
+    userId: "beneficiary", membershipId: "beneficiary", status: "approved",
+    bookingDate: Timestamp.fromDate(new Date("2026-12-10T20:00:00.000Z")),
+    startTime: "18:00", endTime: "20:00", resourceId: "council_hall",
+    requesterName: "Synthetic", requesterPhone: "00000000",
+  });
+  await assert.rejects(createBookingHandler({
+    auth: { uid: "member" },
+    data: {
+      organizationId: "o1", membershipId: "member", bookingId: "blocked-by-legacy",
+      requesterName: "Synthetic", requesterPhone: "00000000",
+      bookingDate: "2026-12-11", startTime: "18:00", endTime: "20:00",
+      occasionType: "QA", notes: "Synthetic Emulator data",
+    },
+  }), (error) => error.code === "already-exists");
+  assert.equal((await database.doc("organizations/o1/bookings/blocked-by-legacy").get()).exists, false);
+});
+
+test("concurrent approval of legacy bookings for one slot yields one winner", async () => {
+  const database = admin.firestore();
+  const bookingDate = Timestamp.fromDate(new Date("2026-11-05T20:00:00.000Z"));
+  await Promise.all(["legacy-race-a", "legacy-race-b"].map((bookingId, index) =>
+    database.doc(`organizations/o1/bookings/${bookingId}`).set({
+      bookingId, organizationId: "o1", userId: index === 0 ? "member" : "beneficiary",
+      membershipId: index === 0 ? "member" : "beneficiary", status: "pending",
+      bookingDate, startTime: "18:00", endTime: "20:00",
+      requesterName: "Synthetic", requesterPhone: "00000000",
+    })));
+  const results = await Promise.allSettled([
+    reviewBookingHandler({ auth: { uid: "finance" }, data: {
+      organizationId: "o1", bookingId: "legacy-race-a", decision: "approve",
+    } }),
+    reviewBookingHandler({ auth: { uid: "finance2" }, data: {
+      organizationId: "o1", bookingId: "legacy-race-b", decision: "approve",
+    } }),
+  ]);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+  const approved = await database.collection("organizations/o1/bookings")
+    .where("status", "==", "approved").get();
+  assert.equal(approved.docs.filter((document) => document.id.startsWith("legacy-race-")).length, 1);
+  assert.equal((await database.collection("organizations/o1/booking_slots").get()).size, 1);
 });
 
 test("production member search enforces three characters, ten results, and council membership", async () => {
@@ -545,6 +862,7 @@ test("financial notification outbox retries a failure and never duplicates deliv
       createdAt,
       readAt: null,
       createdByUserId: "member",
+      deliverySource: "server",
     },
   });
   const event = { data: await outbox.get(), params: { organizationId: "o1", outboxId: outbox.id } };
@@ -693,7 +1011,7 @@ test("full member booking cycle creates, reviews, partially pays, completes, and
   const outsiderDb = environment.authenticatedContext("outsider").firestore();
   const memberBooking = doc(memberDb, bookingPath);
 
-  await assertSucceeds(setDoc(memberBooking, {
+  await assertFails(setDoc(memberBooking, {
     bookingId,
     organizationId: "o1",
     userId: "member",
@@ -707,6 +1025,15 @@ test("full member booking cycle creates, reviews, partially pays, completes, and
     createdAt: new Date(),
     updatedAt: new Date(),
   }));
+  await createBookingHandler({
+    auth: { uid: "member" },
+    data: {
+      bookingId, organizationId: "o1", membershipId: "member",
+      requesterName: "عضو تجريبي", requesterPhone: "00000000",
+      bookingDate: "2026-09-10", occasionType: "اختبار دورة الحجز",
+      notes: "بيانات Emulator وهمية",
+    },
+  });
 
   await assertFails(updateDoc(doc(outsiderDb, bookingPath), {
     status: "approved",
@@ -719,12 +1046,16 @@ test("full member booking cycle creates, reviews, partially pays, completes, and
   }), /Only the booking owner/);
 
   const beforeApproval = await database.doc(bookingPath).get();
-  await assertSucceeds(updateDoc(doc(financeDb, bookingPath), {
+  await assertFails(updateDoc(doc(financeDb, bookingPath), {
     status: "approved",
     approvedBy: "finance",
     approvedAt: new Date(),
     updatedAt: new Date(),
   }));
+  await reviewBookingHandler({
+    auth: { uid: "finance" },
+    data: { organizationId: "o1", bookingId, decision: "approve" },
+  });
   const afterApproval = await database.doc(bookingPath).get();
   await bookingFinancialLifecycleHandler({
     id: `${bookingId}-approved`,
@@ -875,6 +1206,7 @@ test("production scheduled handlers paginate over 200 accounts, fail loudly, and
   await batch.commit();
   let attempts = 0;
   await assert.rejects(generateSubscriptionChargesHandler(null, {
+    environment: enabledScheduleEnvironment("FINANCIAL_SCHEDULE_GENERATE_SUBSCRIPTIONS_ENABLED"),
     database, pageSize: 50, nowDate: new Date("2026-07-31T20:30:00.000Z"),
     processAccount: async (snapshot) => {
       attempts += 1;
@@ -886,12 +1218,14 @@ test("production scheduled handlers paginate over 200 accounts, fail loudly, and
   assert.ok(attempts > 50, "The injected failure must occur after the first page.");
   const logRows = [];
   const stats = await generateSubscriptionChargesHandler(null, {
+    environment: enabledScheduleEnvironment("FINANCIAL_SCHEDULE_GENERATE_SUBSCRIPTIONS_ENABLED"),
     database, pageSize: 50, nowDate: new Date("2026-07-31T20:30:00.000Z"),
     log: { info(message, values) { logRows.push({ message, values }); } },
   });
   assert.equal(stats.scanned, 205);
   assert.equal((await organization.collection("charges").get()).size, 205);
   const retry = await generateSubscriptionChargesHandler(null, {
+    environment: enabledScheduleEnvironment("FINANCIAL_SCHEDULE_GENERATE_SUBSCRIPTIONS_ENABLED"),
     database, pageSize: 50, nowDate: new Date("2026-07-31T20:30:00.000Z"), log: { info() {} },
   });
   assert.equal(retry.outcomes.exists, 205);
@@ -908,12 +1242,14 @@ test("production overdue handler respects Muscat due day and year boundary", asy
     charges.doc("prior-day").set({ organizationId: "time", membershipId: "m", userId: "u", status: "partial", dueDate: Timestamp.fromDate(new Date("2026-12-30T19:00:00Z")) }),
   ]);
   const stats = await markFinancialChargesOverdueHandler(null, {
+    environment: enabledScheduleEnvironment("FINANCIAL_SCHEDULE_MARK_OVERDUE_ENABLED"),
     database, pageSize: 1, nowDate: new Date("2026-12-31T19:30:00Z"), log: { info() {} },
   });
   assert.ok(stats.scanned >= 2);
   assert.equal((await charges.doc("same-day").get()).get("status"), "unpaid");
   assert.equal((await charges.doc("prior-day").get()).get("status"), "overdue");
   await markFinancialChargesOverdueHandler(null, {
+    environment: enabledScheduleEnvironment("FINANCIAL_SCHEDULE_MARK_OVERDUE_ENABLED"),
     database, pageSize: 1, nowDate: new Date("2026-12-31T20:30:00Z"), log: { info() {} },
   });
   assert.equal((await charges.doc("same-day").get()).get("status"), "overdue");
@@ -1080,7 +1416,10 @@ test("booking availability supports members and guests, stays redacted and counc
     auth: { uid: "member" }, data: { organizationId: "o1", year: 2026, month: 8 },
   });
   assert.equal(memberAvailability.days.length, 3);
-  memberAvailability.days.forEach((day) => assert.deepEqual(Object.keys(day).sort(), ["date", "status"]));
+  memberAvailability.days.forEach((day) => {
+    assert.deepEqual(Object.keys(day).sort(), ["date", "endTime", "resourceId", "startTime", "status"]);
+    assert.equal("userId" in day || "requesterName" in day || "receiptUrl" in day || "financialChargeId" in day, false);
+  });
   assert.deepEqual(memberAvailability.days.map((day) => day.status).sort(), ["approved", "approved", "pending"]);
   assert.equal(memberAvailability.days.some((day) => day.date.includes("2026-08-07")), false);
 
@@ -1101,6 +1440,26 @@ test("booking availability supports members and guests, stays redacted and counc
   await assert.rejects(getBookingAvailabilityHandler({
     auth: { uid: "member" }, data: { organizationId: "o2", year: 2026, month: 8 },
   }), /not enabled/);
+});
+
+test("booking availability paginates beyond one hundred without exposing owners", async () => {
+  const database = admin.firestore();
+  const batch = database.batch();
+  for (let index = 0; index < 125; index += 1) {
+    const day = (index % 28) + 1;
+    const bookingId = `availability-page-${String(index).padStart(3, "0")}`;
+    batch.set(database.doc(`organizations/o1/bookings/${bookingId}`), {
+      bookingId, organizationId: "o1", userId: "beneficiary", status: "pending",
+      bookingDate: Timestamp.fromDate(new Date(Date.UTC(2026, 11, day, 8))),
+      requesterName: "Private synthetic", requesterPhone: "00000000",
+    });
+  }
+  await batch.commit();
+  const result = await getBookingAvailabilityHandler({
+    auth: { uid: "member" }, data: { organizationId: "o1", year: 2026, month: 12 },
+  });
+  assert.equal(result.days.length, 125);
+  assert.equal(result.days.some((day) => "userId" in day || "requesterName" in day), false);
 });
 
 test("booking cancellation is owner-only, review-safe, and paid charges require refund review", async () => {
@@ -1224,6 +1583,7 @@ test("scheduled orphan sweep protects recent, linked, incomplete, and Firestore-
     database.doc("organizations/o1/transactions/rejected-linked").set({ receiptStoragePath: rejected, reviewStatus: "rejected" }),
   ]);
   const stats = await cleanupOrphanReceiptsHandler(null, {
+    environment: enabledScheduleEnvironment("FINANCIAL_SCHEDULE_CLEANUP_ORPHANS_ENABLED"),
     database, bucket, nowDate: future, pageSize: 2, log: { info() {} },
     isLinked: async (identity, storagePath) => {
       if (storagePath === readFailure) throw new Error("Firestore unavailable");
@@ -1239,6 +1599,7 @@ test("scheduled orphan sweep protects recent, linked, incomplete, and Firestore-
   await assert.rejects(bucket.file(oldOrphan).getMetadata(), /No such object|404/);
   await bucket.file(recent).getMetadata();
   const rerun = await cleanupOrphanReceiptsHandler(null, {
+    environment: enabledScheduleEnvironment("FINANCIAL_SCHEDULE_CLEANUP_ORPHANS_ENABLED"),
     database, bucket, nowDate: future, pageSize: 2, log: { info() {} },
   });
   assert.equal(rerun.deleted, 1, "The previous Firestore-error orphan becomes deletable on a healthy rerun.");

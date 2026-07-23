@@ -1,5 +1,22 @@
 # سجل الأخطاء
 
+## موانع الجاهزية الإنتاجية — غير مصنفة بعد برقم BUG/TASK
+
+- الحالة: **Code-remediated / Operational verification open**.
+- الأولوية: Critical/High.
+- تاريخ المراجعة: 2026-07-23.
+- أُغلقت محليًا إساءة إنشاء الإشعارات، قراءة `financial_profile` العابرة للمجالس،
+  عدم اتساق المالك الأساسي، الكتابة العميلية للحجوزات وغياب slot lock، seed
+  التلقائي، غياب kill switches، وfallback توقيع Release إلى debug.
+- بقيت موانع لا يمكن إغلاقها في هذه الجولة: جرد/توافق بيانات production، App
+  Check metrics/enforcement في Console، Scheduler/Pub/Sub E2E على staging
+  منشور، نسخة احتياطية واختبار restore، وAndroid Release موقعة بمفتاح حقيقي.
+- الأدلة: Flutter 51/51، Functions 22/22، Emulator 34/34، JSON 5/5،
+  `node --check` ‏10/10، وAPK compile غير موقع. التفاصيل والعقود في
+  `PRE_PRODUCTION_READINESS_REPORT_AR.md`.
+- لم يُنشأ رقم جديد حتى يعتمد تصنيف Project Brain؛ لا يغير ذلك اكتمال
+  `BUG-002` أو MAJ-8 أو `TASK-004`.
+
 ## قالب خطأ
 ### BUG-000 — عنوان الخطأ
 - الحالة: Open

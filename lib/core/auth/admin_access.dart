@@ -46,24 +46,18 @@ class AdminAccess {
   /// على أي دور محلي داخل أي مجلس. لا تعتمد على roleId/role داخل العضوية.
   bool get isPlatformOwner => isSuperAdmin;
 
-  /// المالك الأعلى للنظام. الصلاحية العالمية تأتي من platform_admins
-  /// ([isSuperAdmin]). تُضاف حالات المالك المحلي (isPrimaryOwner/role=owner)
-  /// لأغراض عرض الواجهة داخل المجلس الحالي فقط — والقرار العالمي يبقى
-  /// [isPlatformOwner].
-  bool get isSystemOwner =>
-      isSuperAdmin ||
-      isPrimaryOwner ||
-      roleId == 'system_owner' ||
-      role == 'system_owner' ||
-      role == 'owner';
+  /// المالك الأعلى للمنصة فقط؛ لا يُستنتج من دور عضوية مجلس.
+  bool get isSystemOwner => isPlatformOwner;
 
   bool get isPlatformAdmin => isSuperAdmin;
 
   /// مالك داخل المجلس (له صلاحيات كاملة داخل مجلسه).
   bool get isOrgOwner =>
-      isSystemOwner ||
+      isPlatformOwner ||
+      isPrimaryOwner ||
       roleId == 'owner' ||
       roleId == 'council_owner' ||
+      role == 'owner' ||
       role == 'council_owner' ||
       has('fullAccess');
 
@@ -169,20 +163,20 @@ class AdminAccess {
   bool get canOpenAdmin => canAccessGoldenAdminPanel;
 
   /// هل يمكن للمستخدم الحالي تعديل هذا العضو الهدف؟
-  /// - المالك الأعلى العالمي (platform system_owner): يعدّل أي عضو بلا استثناء.
-  /// - المالك الأساسي للمجلس هدفًا: لا يعدّله إلا المالك الأعلى العالمي —
-  ///   لا رئيس مجلس ولا مدير إداري (حماية من التصعيد).
+  /// - المالك الأعلى العالمي يعدّل العضويات العادية في أي مجلس.
+  /// - المالك الأساسي لا يعدّله أي عميل؛ نقله يتم عبر callable ذري فقط.
   bool canEditMember({
     required String targetRoleId,
     required bool targetIsPrimaryOwner,
     String targetRole = '',
   }) {
-    if (isPlatformOwner) return true; // تجاوز عالمي
     final targetIsOwner = targetIsPrimaryOwner ||
-        targetRoleId == 'system_owner' ||
-        targetRole == 'system_owner' ||
-        targetRole == 'owner';
-    if (targetIsOwner) return false; // فقط المالك الأعلى العالمي يمسّ المالك
+        const {'owner', 'council_owner', 'system_owner'}
+            .contains(targetRoleId) ||
+        const {'owner', 'council_owner', 'system_owner'}.contains(targetRole);
+    // حتى system_owner يستخدم callable ذريًا لنقل الملكية، لا تعديل العميل.
+    if (targetIsOwner) return false;
+    if (isPlatformOwner) return true;
     return canChangeRoles || canManageMembers;
   }
 }

@@ -1,7 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../data/services/organization_seed_service.dart';
-import '../../../data/repositories/notification_repository.dart';
 import 'membership_request_model.dart';
 
 class DuplicatePendingMembershipRequestException implements Exception {
@@ -16,8 +15,6 @@ class MembershipRequestRepository {
       : _firestore = firestore ?? FirebaseFirestore.instance;
 
   final FirebaseFirestore _firestore;
-  late final NotificationRepository _notifications =
-      NotificationRepository(firestore: _firestore);
 
   CollectionReference<Map<String, dynamic>> _requests(String organizationId) {
     return _firestore
@@ -71,30 +68,6 @@ class MembershipRequestRepository {
 
       transaction.set(reference, request.toFirestore());
     });
-    await _notifications.notifyOrganizationReviewers(
-      organizationId: request.organizationId,
-      permissions: const [
-        'members.approve',
-        'members.manage',
-        'membershipRequests.review',
-      ],
-      title: 'طلب انضمام جديد',
-      body: 'يوجد طلب جديد للانضمام إلى المجلس.',
-      type: 'membershipRequestSubmitted',
-      relatedEntityType: 'membershipRequest',
-      relatedEntityId: request.requestId,
-      createdByUserId: request.userId,
-    );
-    await _notifications.createForUser(
-      userId: request.userId,
-      organizationId: request.organizationId,
-      title: 'تم استلام طلب الانضمام',
-      body: 'طلبك قيد مراجعة إدارة المجلس.',
-      type: 'membershipRequestReceived',
-      relatedEntityType: 'membershipRequest',
-      relatedEntityId: request.requestId,
-      createdByUserId: request.userId,
-    );
   }
 
   Future<MembershipRequestModel?> getById({
@@ -269,16 +242,6 @@ class MembershipRequestRepository {
         'createdAt': now,
       });
     });
-    await _notifications.createForUser(
-      userId: requestId,
-      organizationId: organizationId,
-      title: 'تم قبول طلب الانضمام',
-      body: 'تمت الموافقة على انضمامك إلى المجلس.',
-      type: 'membershipApproved',
-      relatedEntityType: 'membershipRequest',
-      relatedEntityId: requestId,
-      createdByUserId: reviewedBy,
-    );
   }
 
   Future<void> reject({
@@ -309,16 +272,6 @@ class MembershipRequestRepository {
         'rejectionReason': reason,
       });
     });
-    await _notifications.createForUser(
-      userId: requestId,
-      organizationId: organizationId,
-      title: 'تم رفض طلب الانضمام',
-      body: reason,
-      type: 'membershipRejected',
-      relatedEntityType: 'membershipRequest',
-      relatedEntityId: requestId,
-      createdByUserId: reviewedBy,
-    );
   }
 
   Future<void> cancel({

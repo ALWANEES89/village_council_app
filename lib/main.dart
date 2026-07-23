@@ -4,10 +4,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'core/theme/app_theme.dart';
+import 'core/firebase/firebase_app_check_config.dart';
 import 'core/firebase/firebase_emulator_config.dart';
 import 'core/notifications/notification_tap_listener.dart';
 import 'router/app_router.dart';
-import 'data/services/organization_seed_service.dart';
 import 'data/services/notification_service.dart';
 import 'firebase_options.dart';
 
@@ -17,7 +17,7 @@ void main() async {
     DefaultFirebaseOptions.currentPlatform,
   );
   await FirebaseEmulatorConfig.connectIfRequested();
-  OrganizationSeedService.instance.start();
+  await FirebaseAppCheckConfig.activate();
   // Push notifications: request permission, wire handlers and keep the signed-in
   // user's FCM token synced. Best-effort so it never blocks app startup.
   if (!FirebaseEmulatorConfig.enabled) {

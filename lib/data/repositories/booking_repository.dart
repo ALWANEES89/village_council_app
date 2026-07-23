@@ -2,7 +2,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
 import '../models/booking_model.dart';
-import 'notification_repository.dart';
 
 List<BookingModel> parseBookingAvailability(
   Map<String, dynamic> data, {
@@ -34,8 +33,6 @@ class BookingRepository {
 
   final FirebaseFirestore _firestore;
   final FirebaseFunctions _functions;
-  late final NotificationRepository _notifications =
-      NotificationRepository(firestore: _firestore);
 
   CollectionReference<Map<String, dynamic>> _bookings(String organizationId) =>
       _firestore
@@ -126,48 +123,21 @@ class BookingRepository {
     String? endTime,
   }) async {
     final reference = _bookings(organizationId).doc();
-    final now = FieldValue.serverTimestamp();
-    await reference.set({
+    final day = '${bookingDate.year.toString().padLeft(4, '0')}-'
+        '${bookingDate.month.toString().padLeft(2, '0')}-'
+        '${bookingDate.day.toString().padLeft(2, '0')}';
+    await _functions.httpsCallable('createBooking').call({
       'bookingId': reference.id,
       'organizationId': organizationId,
-      'userId': userId,
       if (membershipId.isNotEmpty) 'membershipId': membershipId,
       'requesterName': requesterName,
       'requesterPhone': requesterPhone,
-      'bookingDate': Timestamp.fromDate(DateTime(
-        bookingDate.year,
-        bookingDate.month,
-        bookingDate.day,
-      )),
+      'bookingDate': day,
       if (startTime?.trim().isNotEmpty == true) 'startTime': startTime!.trim(),
       if (endTime?.trim().isNotEmpty == true) 'endTime': endTime!.trim(),
       'occasionType': occasionType.trim(),
       'notes': notes.trim(),
-      'status': 'pending',
-      'createdAt': now,
-      'updatedAt': now,
     });
-    // Notification delivery is secondary to the authoritative booking write.
-    await _notifications.notifyOrganizationReviewers(
-      organizationId: organizationId,
-      permissions: const ['bookings.approve', 'bookings.manage'],
-      title: 'طلب حجز جديد',
-      body: 'يوجد طلب جديد لحجز المجلس.',
-      type: 'bookingSubmitted',
-      relatedEntityType: 'booking',
-      relatedEntityId: reference.id,
-      createdByUserId: userId,
-    );
-    await _notifications.createForUser(
-      userId: userId,
-      organizationId: organizationId,
-      title: 'تم إرسال طلب الحجز',
-      body: 'طلب حجز المجلس قيد المراجعة.',
-      type: 'bookingReceived',
-      relatedEntityType: 'booking',
-      relatedEntityId: reference.id,
-      createdByUserId: userId,
-    );
   }
 
   Future<String> requestCancellation({
@@ -203,29 +173,11 @@ class BookingRepository {
     required String bookingId,
     required String reviewedBy,
   }) async {
-    final reference = _bookings(organizationId).doc(bookingId);
-    final snapshot = await reference.get();
-    final requesterId = snapshot.data()?['userId'] as String?;
-    final now = FieldValue.serverTimestamp();
-    await reference.update({
-      'status': 'approved',
-      'approvedBy': reviewedBy,
-      'approvedAt': now,
-      'rejectionReason': null,
-      'updatedAt': now,
+    await _functions.httpsCallable('reviewBooking').call({
+      'organizationId': organizationId,
+      'bookingId': bookingId,
+      'decision': 'approve',
     });
-    if (requesterId?.isNotEmpty == true) {
-      await _notifications.createForUser(
-        userId: requesterId!,
-        organizationId: organizationId,
-        title: 'تم قبول طلب الحجز',
-        body: 'تمت الموافقة على حجز المجلس.',
-        type: 'bookingApproved',
-        relatedEntityType: 'booking',
-        relatedEntityId: bookingId,
-        createdByUserId: reviewedBy,
-      );
-    }
   }
 
   Future<void> reject({
@@ -234,29 +186,11 @@ class BookingRepository {
     required String reviewedBy,
     required String rejectionReason,
   }) async {
-    final reference = _bookings(organizationId).doc(bookingId);
-    final snapshot = await reference.get();
-    final requesterId = snapshot.data()?['userId'] as String?;
-    final reason = rejectionReason.trim();
-    final now = FieldValue.serverTimestamp();
-    await reference.update({
-      'status': 'rejected',
-      'rejectedBy': reviewedBy,
-      'rejectedAt': now,
-      'rejectionReason': reason,
-      'updatedAt': now,
+    await _functions.httpsCallable('reviewBooking').call({
+      'organizationId': organizationId,
+      'bookingId': bookingId,
+      'decision': 'reject',
+      'reason': rejectionReason.trim(),
     });
-    if (requesterId?.isNotEmpty == true) {
-      await _notifications.createForUser(
-        userId: requesterId!,
-        organizationId: organizationId,
-        title: 'تم رفض طلب الحجز',
-        body: reason.isEmpty ? 'تم رفض طلب الحجز.' : reason,
-        type: 'bookingRejected',
-        relatedEntityType: 'booking',
-        relatedEntityId: bookingId,
-        createdByUserId: reviewedBy,
-      );
-    }
   }
 }

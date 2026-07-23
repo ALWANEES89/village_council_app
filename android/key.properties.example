@@ -1,0 +1,12 @@
+# Copy to android/key.properties (ignored by Git) or use the environment
+# variables shown below. Never commit the real file, passwords, or keystore.
+storeFile=C:/secure/path/upload-key.jks
+storePassword=REPLACE_LOCALLY
+keyAlias=REPLACE_LOCALLY
+keyPassword=REPLACE_LOCALLY
+
+# Environment alternatives:
+# VC_RELEASE_STORE_FILE
+# VC_RELEASE_STORE_PASSWORD
+# VC_RELEASE_KEY_ALIAS
+# VC_RELEASE_KEY_PASSWORD

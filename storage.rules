@@ -71,29 +71,37 @@ service firebase.storage {
     // صحّة المسار). firestore.get() على مستند غير موجود يُفشل التقييم، لذا نتحقق
     // دائمًا عبر firestore.exists() أولاً.
     function isAdmin() {
-      return request.auth != null &&
-        firestore.exists(
+      return isSystemOwner() ||
+        (request.auth != null && firestore.exists(
           /databases/(default)/documents/members/$(request.auth.uid)
         ) &&
         firestore.get(
           /databases/(default)/documents/members/$(request.auth.uid)
-        ).data.get('isAdmin', false) == true;
+        ).data.get('isAdmin', false) == true);
     }
 
-    function isSuperAdmin() {
+    // system_owner منصة منفصل. superAdmin توافق قديم ويتطلب fullAccess.
+    function isSystemOwner() {
       return request.auth != null &&
         firestore.exists(
           /databases/(default)/documents/platform_admins/$(request.auth.uid)
         ) &&
-        firestore.get(
-          /databases/(default)/documents/platform_admins/$(request.auth.uid)
-        ).data.get('role', '') == 'superAdmin' &&
         firestore.get(
           /databases/(default)/documents/platform_admins/$(request.auth.uid)
         ).data.get('status', '') == 'active' &&
-        firestore.get(
-          /databases/(default)/documents/platform_admins/$(request.auth.uid)
-        ).data.get('fullAccess', false) == true;
+        (firestore.get(
+           /databases/(default)/documents/platform_admins/$(request.auth.uid)
+         ).data.get('role', '') == 'system_owner' ||
+         (firestore.get(
+            /databases/(default)/documents/platform_admins/$(request.auth.uid)
+          ).data.get('role', '') == 'superAdmin' &&
+          firestore.get(
+            /databases/(default)/documents/platform_admins/$(request.auth.uid)
+          ).data.get('fullAccess', false) == true));
+    }
+
+    function isSuperAdmin() {
+      return isSystemOwner();
     }
 
   }

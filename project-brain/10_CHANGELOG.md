@@ -1,5 +1,24 @@
 # سجل التحديثات
 
+## 2026-07-23 — معالجة موانع الجاهزية CRITICAL/HIGH محليًا
+
+- نقل إنشاء الإشعارات والحجوزات وBootstrap/repair إلى Cloud Functions محمية،
+  وإغلاق الكتابة العميلية ومسارات FCM غير الموثوقة في Rules والتطبيق.
+- عزل `financial_profile` حسب المجلس والصلاحية، وتوحيد المالك الأساسي مع إسقاط
+  `member_access/{userId}` ودعم legacy آمن دون افتراض تطابق معرف العضوية.
+- إضافة slot locks ذرية للحجوزات، اختبار تزامن بفائز واحد، دعم حجز legacy بلا
+  lock، pagination للتوفر دون كشف بيانات المالك، وتحرير القفل المقيد بالحجز.
+- منع seed التلقائي في التشغيل العادي، وإضافة App Check لـAndroid، kill switches
+  آمنة للمجدولات، وأدوات inventory/migration manifest/rollback دون تشغيل إنتاجي.
+- إزالة debug-signing fallback وإضافة إعداد توقيع محلي مستبعد. نجح compile إلى
+  APK غير موقع؛ لا يوجد keystore إنتاج، لذلك لا تعد هذه نسخة نشر.
+- البوابات: Flutter 51/51، Functions 22/22 على Node 20.20.2، Emulator 34/34 على
+  `demo-financial-prestaging`، JSON 5/5، `node --check` ‏10/10، وصفر أخطاء analyze
+  مع بقاء 4 تحذيرات Widgets القديمة.
+- القرار المحدث ما زال NO-GO إلى أن يكتمل جرد البيانات وApp Check/Scheduler
+  staging والتوقيع الحقيقي والنسخ الاحتياطي. لم يحدث deploy أو migration أو
+  قراءة/كتابة `alrahmat-console`، ولم يحدث commit أو push.
+
 ## 2026-07-23 — حفظ MAJ-8 وBUG-002 في GitHub
 - جُمعت تغييرات النظام المالي والحجوزات وإصلاح `BUG-002` والاختبارات وتقارير الإغلاق في commit واحد مترابط: `c0caad5 feat(finance): finalize MAJ-8 financial and booking workflows` (59 ملفًا).
 - رُفع commit إلى `origin/main` دفعًا عاديًا، ثم طابقت نتيجة `git ls-remote` المعرّف الكامل المحلي `c0caad5d7e16a1506dd535beee35931ea353969c`.

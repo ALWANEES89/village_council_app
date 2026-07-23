@@ -12,6 +12,8 @@
 let admin;
 let FieldValue;
 let Timestamp;
+const fs = require("node:fs");
+const path = require("node:path");
 try {
   admin = require("firebase-admin");
   ({ FieldValue, Timestamp } = require("firebase-admin/firestore"));
@@ -30,10 +32,12 @@ function parseOptions(argv) {
   const values = [...argv];
   const projectIndex = values.indexOf("--project");
   const confirmIndex = values.indexOf("--confirm");
+  const manifestIndex = values.indexOf("--manifest");
   return {
     apply: values.includes("--apply"),
     projectId: projectIndex >= 0 ? values[projectIndex + 1] : undefined,
     confirmation: confirmIndex >= 0 ? values[confirmIndex + 1] : undefined,
+    manifestPath: manifestIndex >= 0 ? values[manifestIndex + 1] : undefined,
   };
 }
 
@@ -42,6 +46,55 @@ function validateOptions(options) {
   if (options.apply && options.confirmation !== `APPLY:${options.projectId}`) {
     throw new Error(`--apply requires --confirm APPLY:${options.projectId}.`);
   }
+  if (options.apply && !options.manifestPath) {
+    throw new Error("--apply requires an explicit --manifest path.");
+  }
+  if (options.manifestPath) {
+    const resolved = path.resolve(options.manifestPath);
+    const allowedRoot = path.resolve("migration-manifests");
+    if (!resolved.startsWith(`${allowedRoot}${path.sep}`)) {
+      throw new Error("--manifest must be inside the ignored migration-manifests directory.");
+    }
+  }
+}
+
+function manifestValue(value) {
+  if (value == null || ["string", "number", "boolean"].includes(typeof value)) return value;
+  if (value instanceof Timestamp) return { __type: "timestamp", value: value.toDate().toISOString() };
+  if (Array.isArray(value)) return value.map(manifestValue);
+  if (value.constructor && value.constructor.name === "FieldValue") {
+    return { __type: "serverTimestamp" };
+  }
+  if (typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, manifestValue(item)]));
+  }
+  return String(value);
+}
+
+async function buildManifest(writes, { projectId, db }) {
+  const entries = [];
+  for (const write of writes) {
+    const before = await write.reference.get();
+    entries.push({
+      path: write.reference.path,
+      operation: before.exists ? "merge" : "create",
+      before: before.exists ? manifestValue(before.data()) : null,
+      after: manifestValue(write.data),
+    });
+  }
+  return {
+    schema: "financial-v1-migration-manifest/v1",
+    projectId,
+    generatedAt: new Date().toISOString(),
+    containsSensitiveData: true,
+    entries,
+  };
+}
+
+function writeManifest(manifest, manifestPath) {
+  if (!manifestPath) return;
+  fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
 }
 
 async function commitWrites(writes, { apply, db }) {
@@ -61,7 +114,7 @@ async function main(argv = process.argv.slice(2)) {
   validateOptions(options);
   admin.initializeApp({ projectId: options.projectId });
   const db = admin.firestore();
-  const { apply, projectId } = options;
+  const { apply, projectId, manifestPath } = options;
   console.log(`Financial v1 migration mode: ${apply ? "APPLY" : "DRY RUN"}`);
   if (!projectId) console.warn("No --project supplied; Application Default Credentials project will be used.");
   const writes = [];
@@ -199,9 +252,11 @@ async function main(argv = process.argv.slice(2)) {
   console.log(`Amount totals: before=${stats.amountBeforeRials.toFixed(3)} OMR; after=${stats.amountAfterBaisa} baisa (${(stats.amountAfterBaisa / 1000).toFixed(3)} OMR)`);
   console.log(`Skipped report entries: ${skippedRecords.length}`);
   console.log(`Planned idempotent writes: ${writes.length}`);
+  const manifest = await buildManifest(writes, { projectId, db });
+  writeManifest(manifest, manifestPath);
   await commitWrites(writes, { apply, db });
   console.log(apply ? "Migration writes completed." : "Dry run completed; no data was changed.");
-  return { stats, skippedRecords, plannedWrites: writes.length };
+  return { stats, skippedRecords, plannedWrites: writes.length, manifestEntries: manifest.entries.length };
 }
 
 if (require.main === module) {
@@ -211,4 +266,12 @@ if (require.main === module) {
   });
 }
 
-module.exports = { commitWrites, main, parseOptions, validateOptions };
+module.exports = {
+  buildManifest,
+  commitWrites,
+  main,
+  manifestValue,
+  parseOptions,
+  validateOptions,
+  writeManifest,
+};

@@ -15,6 +15,7 @@ const {
 const {
   formatOmaniRialForSystemNotification,
 } = require("./omr_currency");
+const { membershipForUser } = require("./production_security")._test;
 
 const db = () => admin.firestore();
 const timestamp = () => Timestamp.now();
@@ -31,14 +32,7 @@ const receiptContentTypes = new Map([
 ]);
 const financialMemberPageSize = 50;
 const financialMemberPageTokenVersion = 1;
-
-async function membershipForUser(organizationId, userId) {
-  const organization = db().collection("organizations").doc(organizationId);
-  const direct = await organization.collection("memberships").doc(userId).get();
-  if (direct.exists && direct.get("userId") === userId) return direct;
-  const query = await organization.collection("memberships").where("userId", "==", userId).limit(1).get();
-  return query.empty ? null : query.docs[0];
-}
+const sensitiveCallableOptions = { region: "us-central1", enforceAppCheck: true };
 
 async function requireActiveMembership(organizationId, userId) {
   const membership = await membershipForUser(organizationId, userId);
@@ -188,6 +182,7 @@ function notification(userId, organizationId, id, title, body, type, transaction
     createdAt: timestamp(),
     readAt: null,
     createdByUserId: actorId,
+    deliverySource: "server",
   };
   if (money && Number.isSafeInteger(money.amountBaisa) && money.currencyCode === "OMR" &&
       typeof money.bodyTemplate === "string" && money.bodyTemplate.includes("{amount}")) {
@@ -529,8 +524,15 @@ async function requestBookingCancellationHandler(request) {
       throw new HttpsError("permission-denied", "Only the booking owner can cancel it.");
     }
     const status = booking.get("status");
+    const slotKey = booking.get("slotKey");
+    const slotRef = typeof slotKey === "string" && slotKey
+      ? organization.collection("booking_slots").doc(slotKey) : null;
+    const slot = slotRef ? await transaction.get(slotRef) : null;
     const now = timestamp();
     if (status === "pending") {
+      if (slot && slot.exists && slot.get("bookingId") === bookingId) {
+        transaction.delete(slotRef);
+      }
       transaction.update(bookingRef, {
         status: "cancelled", cancellationReason: reason || null, cancelledBy: userId,
         cancelledAt: now, updatedAt: now,
@@ -561,7 +563,7 @@ async function requestBookingCancellationHandler(request) {
     ));
   return result;
 }
-exports.requestBookingCancellation = onCall({ region: "us-central1" }, requestBookingCancellationHandler);
+exports.requestBookingCancellation = onCall(sensitiveCallableOptions, requestBookingCancellationHandler);
 
 async function reviewBookingCancellationHandler(request) {
   const reviewerId = requireAuth(request);
@@ -589,7 +591,13 @@ async function reviewBookingCancellationHandler(request) {
     if (!booking.exists || booking.get("status") !== "cancellationRequested") {
       throw new HttpsError("failed-precondition", "Cancellation request is no longer pending.");
     }
-    const charge = chargeRef ? await transaction.get(chargeRef) : null;
+    const slotKey = booking.get("slotKey");
+    const slotRef = typeof slotKey === "string" && slotKey
+      ? organization.collection("booking_slots").doc(slotKey) : null;
+    const [charge, slot] = await Promise.all([
+      chargeRef ? transaction.get(chargeRef) : null,
+      slotRef ? transaction.get(slotRef) : null,
+    ]);
     const now = timestamp();
     if (decision === "reject") {
       transaction.update(bookingRef, {
@@ -609,6 +617,9 @@ async function reviewBookingCancellationHandler(request) {
         updatedAt: now, updatedBy: reviewerId,
       });
     }
+    if (slot && slot.exists && slot.get("bookingId") === bookingId) {
+      transaction.delete(slotRef);
+    }
     transaction.update(bookingRef, {
       status: "cancelled", cancellationRequestStatus: "approved", cancelledBy: reviewerId,
       cancelledAt: now, cancellationReviewedBy: reviewerId, cancellationReviewedAt: now, updatedAt: now,
@@ -626,7 +637,7 @@ async function reviewBookingCancellationHandler(request) {
     ));
   return { status: result.status, chargeStatus: result.chargeStatus };
 }
-exports.reviewBookingCancellation = onCall({ region: "us-central1" }, reviewBookingCancellationHandler);
+exports.reviewBookingCancellation = onCall(sensitiveCallableOptions, reviewBookingCancellationHandler);
 
 async function getBookingAvailabilityHandler(request) {
   const userId = requireAuth(request);
@@ -646,26 +657,73 @@ async function getBookingAvailabilityHandler(request) {
   // Oman is UTC+4 all year. Query exact Muscat month boundaries, not UTC month boundaries.
   const start = new Date(Date.UTC(year, month - 1, 1, -4));
   const end = new Date(Date.UTC(year, month, 1, -4));
-  const snapshot = await organization.collection("bookings")
-    .where("bookingDate", ">=", Timestamp.fromDate(start))
-    .where("bookingDate", "<", Timestamp.fromDate(end))
-    .where("status", "in", ["pending", "approved", "cancellationRequested"])
-    .limit(100).get();
+  const bookings = [];
+  let cursor = null;
+  do {
+    let query = organization.collection("bookings")
+      .where("bookingDate", ">=", Timestamp.fromDate(start))
+      .where("bookingDate", "<", Timestamp.fromDate(end))
+      .orderBy("bookingDate")
+      .orderBy(FieldPath.documentId())
+      .limit(200);
+    if (cursor) query = query.startAfter(cursor);
+    const page = await query.get();
+    bookings.push(...page.docs.filter((document) =>
+      ["pending", "approved", "cancellationRequested"].includes(document.get("status"))));
+    cursor = page.size === 200 ? page.docs.at(-1) : null;
+  } while (cursor);
   return {
-    days: snapshot.docs.map((doc) => ({
+    // Projection intentionally excludes owner identity, phone, notes, charge,
+    // receipt, reviewer, and every financial field.
+    days: bookings.map((doc) => ({
       date: doc.get("bookingDate").toDate().toISOString(),
       status: doc.get("status") === "approved" || doc.get("status") === "cancellationRequested" ? "approved" : "pending",
+      resourceId: doc.get("resourceId") || "council_hall",
+      startTime: doc.get("startTime") || null,
+      endTime: doc.get("endTime") || null,
     })),
   };
 }
-exports.getBookingAvailability = onCall({ region: "us-central1" }, getBookingAvailabilityHandler);
+exports.getBookingAvailability = onCall(sensitiveCallableOptions, getBookingAvailabilityHandler);
 
-async function generateSubscriptionChargesHandler(_event, options = {}) {
+const scheduleEnvironmentKeys = {
+  generateSubscriptionCharges: "FINANCIAL_SCHEDULE_GENERATE_SUBSCRIPTIONS_ENABLED",
+  markFinancialChargesOverdue: "FINANCIAL_SCHEDULE_MARK_OVERDUE_ENABLED",
+  cleanupOrphanFinancialReceipts: "FINANCIAL_SCHEDULE_CLEANUP_ORPHANS_ENABLED",
+  expirePendingFinancialReceipts: "FINANCIAL_SCHEDULE_EXPIRE_RECEIPTS_ENABLED",
+};
+
+function scheduleGate(task, event, options = {}) {
+  const environment = options.environment || process.env;
+  const runId = String(options.runId || event && event.id || `${task}-local`);
+  const globalEnabled = environment.FINANCIAL_SCHEDULES_ENABLED === "true";
+  const taskEnabled = environment[scheduleEnvironmentKeys[task]] === "true";
+  const dryRun = environment.FINANCIAL_SCHEDULE_DRY_RUN !== "false";
+  if (!globalEnabled || !taskEnabled) {
+    return { execute: false, result: { status: "disabled", task, runId, writes: 0 } };
+  }
+  if (dryRun) {
+    return { execute: false, result: { status: "dry-run", task, runId, writes: 0 } };
+  }
+  return { execute: true, runId };
+}
+
+function logScheduleResult(log, result) {
+  const method = log.info || log.log;
+  method.call(log, "Financial schedule result", result);
+}
+
+async function generateSubscriptionChargesHandler(event, options = {}) {
   const database = options.database || db();
   const nowDate = options.nowDate || new Date();
   const processAccount = options.processAccount ||
     ((snapshot) => ensureSubscriptionCharge(snapshot, { nowDate }));
   const log = options.log || console;
+  const gate = scheduleGate("generateSubscriptionCharges", event, options);
+  if (!gate.execute) {
+    logScheduleResult(log, gate.result);
+    return gate.result;
+  }
   const stats = await processPaginated({
     pageSize: options.pageSize || 200,
     concurrency: options.concurrency || 10,
@@ -681,8 +739,9 @@ async function generateSubscriptionChargesHandler(_event, options = {}) {
     },
     processItem: processAccount,
   });
-  log.info ? log.info("Daily subscription charge generation", stats) : log.log("Daily subscription charge generation", stats);
-  return stats;
+  const result = { status: "completed", task: "generateSubscriptionCharges", runId: gate.runId, ...stats };
+  logScheduleResult(log, result);
+  return result;
 }
 
 exports.generateSubscriptionChargesDaily = onSchedule(
@@ -693,10 +752,15 @@ exports.generateSubscriptionChargesDaily = onSchedule(
   generateSubscriptionChargesHandler
 );
 
-async function markFinancialChargesOverdueHandler(_event, options = {}) {
+async function markFinancialChargesOverdueHandler(event, options = {}) {
   const database = options.database || db();
   const nowDate = options.nowDate || new Date();
   const log = options.log || console;
+  const gate = scheduleGate("markFinancialChargesOverdue", event, options);
+  if (!gate.execute) {
+    logScheduleResult(log, gate.result);
+    return gate.result;
+  }
   const stats = await processPaginated({
     pageSize: options.pageSize || 200,
     concurrency: options.concurrency || 20,
@@ -716,8 +780,9 @@ async function markFinancialChargesOverdueHandler(_event, options = {}) {
       return "overdue";
     },
   });
-  log.info ? log.info("Financial overdue scan", stats) : log.log("Financial overdue scan", stats);
-  return stats;
+  const result = { status: "completed", task: "markFinancialChargesOverdue", runId: gate.runId, ...stats };
+  logScheduleResult(log, result);
+  return result;
 }
 
 exports.markFinancialChargesOverdue = onSchedule(
@@ -728,7 +793,7 @@ exports.markFinancialChargesOverdue = onSchedule(
   markFinancialChargesOverdueHandler
 );
 
-exports.updateFinancialSettings = onCall({ region: "us-central1" }, async (request) => {
+exports.updateFinancialSettings = onCall(sensitiveCallableOptions, async (request) => {
   const actorUserId = requireAuth(request);
   const organizationId = requireString(request.data.organizationId, "organizationId", 128);
   const requestId = requireString(request.data.requestId, "requestId", 128);
@@ -767,7 +832,7 @@ exports.updateFinancialSettings = onCall({ region: "us-central1" }, async (reque
   return { status: "updated" };
 });
 
-exports.saveFinancialPlan = onCall({ region: "us-central1" }, async (request) => {
+exports.saveFinancialPlan = onCall(sensitiveCallableOptions, async (request) => {
   const actorUserId = requireAuth(request);
   const organizationId = requireString(request.data.organizationId, "organizationId", 128);
   const requestId = requireString(request.data.requestId, "requestId", 128);
@@ -803,7 +868,7 @@ exports.saveFinancialPlan = onCall({ region: "us-central1" }, async (request) =>
   return { planId };
 });
 
-exports.updateMemberFinancialAccount = onCall({ region: "us-central1" }, async (request) => {
+exports.updateMemberFinancialAccount = onCall(sensitiveCallableOptions, async (request) => {
   const actorUserId = requireAuth(request);
   const organizationId = requireString(request.data.organizationId, "organizationId", 128);
   const requestId = requireString(request.data.requestId, "requestId", 128);
@@ -849,7 +914,7 @@ exports.updateMemberFinancialAccount = onCall({ region: "us-central1" }, async (
   return { status: "updated" };
 });
 
-exports.createManualFinancialCharge = onCall({ region: "us-central1" }, async (request) => {
+exports.createManualFinancialCharge = onCall(sensitiveCallableOptions, async (request) => {
   const actorUserId = requireAuth(request);
   const organizationId = requireString(request.data.organizationId, "organizationId", 128);
   const requestId = requireString(request.data.requestId, "requestId", 128);
@@ -913,7 +978,7 @@ async function searchCouncilMembersHandler(request) {
     }),
   };
 }
-exports.searchCouncilMembers = onCall({ region: "us-central1" }, searchCouncilMembersHandler);
+exports.searchCouncilMembers = onCall(sensitiveCallableOptions, searchCouncilMembersHandler);
 
 function encodeFinancialMemberPageToken(organizationId, fullName, documentId) {
   return Buffer.from(JSON.stringify({
@@ -975,7 +1040,7 @@ async function listFinancialMembersHandler(request) {
       : null,
   };
 }
-exports.listFinancialMembers = onCall({ region: "us-central1" }, listFinancialMembersHandler);
+exports.listFinancialMembers = onCall(sensitiveCallableOptions, listFinancialMembersHandler);
 
 async function getPayableChargesHandler(request) {
   const userId = requireAuth(request);
@@ -1059,7 +1124,7 @@ async function getPayableChargesHandler(request) {
       : null,
   };
 }
-exports.getPayableCharges = onCall({ region: "us-central1" }, getPayableChargesHandler);
+exports.getPayableCharges = onCall(sensitiveCallableOptions, getPayableChargesHandler);
 
 async function getGuestBookingChargeHandler(request) {
   const userId = requireAuth(request);
@@ -1084,7 +1149,7 @@ async function getGuestBookingChargeHandler(request) {
     lastTransactionId: data.lastTransactionId || null,
   } };
 }
-exports.getGuestBookingCharge = onCall({ region: "us-central1" }, getGuestBookingChargeHandler);
+exports.getGuestBookingCharge = onCall(sensitiveCallableOptions, getGuestBookingChargeHandler);
 
 async function submitGuestBookingReceiptHandler(request) {
   const payerUserId = requireAuth(request);
@@ -1182,7 +1247,7 @@ async function submitGuestBookingReceiptHandler(request) {
   });
   return { transactionId: receiptId, idempotent: result.idempotent };
 }
-exports.submitGuestBookingReceipt = onCall({ region: "us-central1" }, submitGuestBookingReceiptHandler);
+exports.submitGuestBookingReceipt = onCall(sensitiveCallableOptions, submitGuestBookingReceiptHandler);
 
 async function submitFinancialReceiptHandler(request) {
   const payerUserId = requireAuth(request);
@@ -1363,7 +1428,7 @@ async function submitFinancialReceiptHandler(request) {
 
   return { transactionId: transactionRef.id, allocations: submission.allocations.length, idempotent: false };
 }
-exports.submitFinancialReceipt = onCall({ region: "us-central1" }, submitFinancialReceiptHandler);
+exports.submitFinancialReceipt = onCall(sensitiveCallableOptions, submitFinancialReceiptHandler);
 
 async function reviewFinancialReceiptHandler(request) {
   const reviewerId = requireAuth(request);
@@ -1479,7 +1544,7 @@ async function reviewFinancialReceiptHandler(request) {
   });
   return { status: decision === "approve" ? "approved" : "rejected" };
 }
-exports.reviewFinancialReceipt = onCall({ region: "us-central1" }, reviewFinancialReceiptHandler);
+exports.reviewFinancialReceipt = onCall(sensitiveCallableOptions, reviewFinancialReceiptHandler);
 
 async function deliverFinancialNotificationOutboxHandler(event, options = {}) {
   const snapshot = event.data;
@@ -1495,6 +1560,7 @@ async function deliverFinancialNotificationOutboxHandler(event, options = {}) {
     const payload = data.payload;
     if (data.organizationId !== organization.id || typeof data.userId !== "string" ||
         typeof data.notificationId !== "string" || !payload ||
+        payload.deliverySource !== "server" ||
         payload.userId !== data.userId || payload.notificationId !== data.notificationId ||
         payload.organizationId !== organization.id) {
       throw new Error("Financial notification outbox payload is invalid.");
@@ -1644,7 +1710,7 @@ async function getFinancialReceiptDownloadUrlHandler(request, options = {}) {
 }
 
 exports.getFinancialReceiptDownloadUrl = onCall(
-  { region: "us-central1" },
+  sensitiveCallableOptions,
   getFinancialReceiptDownloadUrlHandler
 );
 
@@ -1662,13 +1728,18 @@ function receiptSweepAgeHours() {
   return Number.isFinite(configured) && configured >= 24 && configured <= 720 ? configured : 48;
 }
 
-async function cleanupOrphanReceiptsHandler(_event, options = {}) {
+async function cleanupOrphanReceiptsHandler(event, options = {}) {
   const database = options.database || db();
   const bucket = options.bucket || admin.storage().bucket();
   const nowDate = options.nowDate || new Date();
   const minimumAgeHours = options.minimumAgeHours || receiptSweepAgeHours();
   const pageSize = options.pageSize || 100;
   const log = options.log || console;
+  const gate = scheduleGate("cleanupOrphanFinancialReceipts", event, options);
+  if (!gate.execute) {
+    logScheduleResult(log, gate.result);
+    return gate.result;
+  }
   const isLinked = options.isLinked || ((identity, path) => receiptIsLinked(identity, path, database));
   const stats = {
     scanned: 0,
@@ -1744,8 +1815,9 @@ async function cleanupOrphanReceiptsHandler(_event, options = {}) {
     if (nextToken) seenTokens.add(nextToken);
     pageToken = nextToken;
   } while (pageToken);
-  log.info ? log.info("Temporary financial receipt cleanup", stats) : log.log("Temporary financial receipt cleanup", stats);
-  return stats;
+  const result = { status: "completed", task: "cleanupOrphanFinancialReceipts", runId: gate.runId, ...stats };
+  logScheduleResult(log, result);
+  return result;
 }
 
 exports.cleanupOrphanFinancialReceipts = onSchedule(
@@ -1756,7 +1828,7 @@ exports.cleanupOrphanFinancialReceipts = onSchedule(
   cleanupOrphanReceiptsHandler
 );
 
-exports.cleanupOrphanReceipt = onCall({ region: "us-central1" }, async (request) => {
+exports.cleanupOrphanReceipt = onCall(sensitiveCallableOptions, async (request) => {
   const userId = requireAuth(request);
   const storagePath = requireString(request.data.receiptStoragePath, "receiptStoragePath", 1024);
   const identity = receiptStorageIdentity(storagePath);
@@ -1777,47 +1849,60 @@ exports.cleanupOrphanReceipt = onCall({ region: "us-central1" }, async (request)
   return { status: "deleted" };
 });
 
+async function expirePendingFinancialReceiptsHandler(event, options = {}) {
+  const database = options.database || db();
+  const log = options.log || console;
+  const gate = scheduleGate("expirePendingFinancialReceipts", event, options);
+  if (!gate.execute) {
+    logScheduleResult(log, gate.result);
+    return gate.result;
+  }
+  const now = options.now || timestamp();
+  const stats = await processPaginated({
+    pageSize: options.pageSize || 200,
+    concurrency: options.concurrency || 10,
+    fetchPage: async ({ cursor, pageSize }) => {
+      let query = database.collectionGroup("transactions")
+        .where("reviewStatus", "==", "pending")
+        .where("expiresAt", "<", now)
+        .orderBy("expiresAt")
+        .orderBy(FieldPath.documentId())
+        .limit(pageSize);
+      if (cursor) query = query.startAfter(cursor);
+      const snapshot = await query.get();
+      return { items: snapshot.docs, nextCursor: snapshot.size === pageSize ? snapshot.docs.at(-1) : null };
+    },
+    processItem: async (doc) => {
+      const data = doc.data();
+      const organization = doc.ref.parent.parent;
+      if (!organization) return "invalid";
+      await database.runTransaction(async (transaction) => {
+        const current = await transaction.get(doc.ref);
+        if (!current.exists || current.get("reviewStatus") !== "pending" ||
+            current.get("expiresAt").toMillis() > now.toMillis()) return;
+        transaction.update(doc.ref, {
+          reviewStatus: "expired", status: "expired", currentStatus: "expired",
+          updatedAt: now, expiredAt: now,
+        });
+        for (const chargeId of data.allocationChargeIds || []) {
+          transaction.delete(organization.collection("pending_receipt_locks")
+            .doc(`${data.payerUserId}_${chargeId}`));
+        }
+      });
+      return "expired";
+    },
+  });
+  const result = { status: "completed", task: "expirePendingFinancialReceipts", runId: gate.runId, ...stats };
+  logScheduleResult(log, result);
+  return result;
+}
+
 exports.expirePendingFinancialReceipts = onSchedule(
   {
     schedule: "every 60 minutes", timeZone: "Asia/Muscat", region: "us-central1",
     timeoutSeconds: 540, memory: "512MiB", maxInstances: 1,
   },
-  async () => {
-    const now = timestamp();
-    const stats = await processPaginated({
-      pageSize: 200,
-      concurrency: 10,
-      fetchPage: async ({ cursor, pageSize }) => {
-        let query = db().collectionGroup("transactions")
-          .where("reviewStatus", "==", "pending")
-          .where("expiresAt", "<", now)
-          .orderBy("expiresAt")
-          .orderBy(FieldPath.documentId())
-          .limit(pageSize);
-        if (cursor) query = query.startAfter(cursor);
-        const snapshot = await query.get();
-        return { items: snapshot.docs, nextCursor: snapshot.size === pageSize ? snapshot.docs.at(-1) : null };
-      },
-      processItem: async (doc) => {
-        const data = doc.data();
-        const organization = doc.ref.parent.parent;
-        if (!organization) return "invalid";
-        await db().runTransaction(async (transaction) => {
-          const current = await transaction.get(doc.ref);
-          if (!current.exists || current.get("reviewStatus") !== "pending" || current.get("expiresAt").toMillis() > now.toMillis()) return;
-          transaction.update(doc.ref, {
-            reviewStatus: "expired", status: "expired", currentStatus: "expired",
-            updatedAt: now, expiredAt: now,
-          });
-          for (const chargeId of data.allocationChargeIds || []) {
-            transaction.delete(organization.collection("pending_receipt_locks").doc(`${data.payerUserId}_${chargeId}`));
-          }
-        });
-        return "expired";
-      },
-    });
-    console.log("Pending receipt expiration", stats);
-  }
+  expirePendingFinancialReceiptsHandler
 );
 
 exports._test = {
@@ -1825,6 +1910,7 @@ exports._test = {
   cleanupOrphanReceiptsHandler,
   deliverFinancialNotificationOutboxHandler,
   ensureSubscriptionCharge,
+  expirePendingFinancialReceiptsHandler,
   generateSubscriptionChargesHandler,
   getBookingAvailabilityHandler,
   getFinancialReceiptDownloadUrlHandler,
@@ -1832,6 +1918,7 @@ exports._test = {
   getPayableChargesHandler,
   listFinancialMembersHandler,
   markFinancialChargesOverdueHandler,
+  scheduleGate,
   notification,
   receiptIsLinked,
   receiptBytesMatchContentType,

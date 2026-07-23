@@ -1,9 +1,7 @@
-import 'dart:async';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
-
-import '../services/organization_seed_service.dart';
+import 'package:uuid/uuid.dart';
 
 class OrganizationRepairFailure {
   const OrganizationRepairFailure({
@@ -36,10 +34,14 @@ class OrganizationRepairResult {
 }
 
 class OrganizationRepository {
-  OrganizationRepository({FirebaseFirestore? firestore})
-      : _firestore = firestore ?? FirebaseFirestore.instance;
+  OrganizationRepository({
+    FirebaseFirestore? firestore,
+    FirebaseFunctions? functions,
+  })  : _firestore = firestore ?? FirebaseFirestore.instance,
+        _functions = functions ?? FirebaseFunctions.instance;
 
   final FirebaseFirestore _firestore;
+  final FirebaseFunctions _functions;
 
   CollectionReference<Map<String, dynamic>> get _organizations =>
       _firestore.collection('organizations');
@@ -47,24 +49,10 @@ class OrganizationRepository {
   Future<void> create({
     required String organizationId,
     required Map<String, dynamic> data,
-  }) {
-    final now = FieldValue.serverTimestamp();
-    final joinCode = _normalizeJoinCode(data['joinCode']);
-    return _organizations.doc(organizationId).set({
-      ...data,
-      'organizationId': organizationId,
-      'joinCode': joinCode,
-      'joinQrData': joinCode == null
-          ? null
-          : _buildJoinQrData(
-              organizationId: organizationId,
-              joinCode: joinCode,
-            ),
-      'joinQrEnabled':
-          joinCode != null && (data['joinQrEnabled'] as bool? ?? false),
-      'createdAt': data['createdAt'] ?? now,
-      'updatedAt': data['updatedAt'] ?? now,
-    });
+  }) async {
+    throw UnsupportedError(
+      'Organizations must be created through bootstrapOrganization.',
+    );
   }
 
   Future<String> createWithDefaults({
@@ -84,85 +72,21 @@ class OrganizationRepository {
     required String createdBy,
     bool assignCreatorAsChairman = false,
   }) async {
-    final reference = _organizations.doc();
-    final now = FieldValue.serverTimestamp();
-    final seed = OrganizationSeedService.instance;
-    await _firestore.runTransaction((transaction) async {
-      transaction.set(reference, {
-        ...data,
-        'organizationId': reference.id,
-        'status': 'active',
-        'profilePublished': true,
-        'schemaVersion': 1,
-        'navigationEnabled': true,
-        'createdAt': now,
-        'updatedAt': now,
-        'createdBy': createdBy,
-      });
-      // توثيق منشئ المستندات المبذورة حتى تُنسب أحداث الإنشاء في سجل الأحداث
-      // الخادمي إلى الفاعل بدل unknown.
-      transaction.set(
-        reference.collection('financial_profile').doc('banking'),
-        {...seed.bankingDefaults(), 'updatedBy': createdBy},
-      );
-      transaction.set(
-        reference.collection('settings').doc('organization'),
-        {
-          ...seed.organizationSettingsDefaults(),
-          'phone': data['phone'] ?? '',
-          'email': data['email'] ?? '',
-          'address': data['address'] ?? '',
-          'updatedBy': createdBy,
-        },
-      );
-      transaction.set(
-        reference.collection('settings').doc('location_maps'),
-        {
-          ...seed.locationDefaults(),
-          'googleMapsUrl': data['googleMapsUrl'] ?? '',
-          'updatedBy': createdBy,
-        },
-      );
-      for (final role in seed.defaultRoles.entries) {
-        transaction.set(
-          reference.collection('roles').doc(role.key),
-          {...role.value, 'createdBy': createdBy, 'updatedBy': createdBy},
-        );
-      }
-      for (final collection in const [
-        'memberships',
-        'membership_requests',
-        'announcements',
-        'events',
-        'rentals',
-        'rental_resources',
-      ]) {
-        transaction.set(reference.collection(collection).doc('_meta'), {
-          'initialized': true,
-          'schemaVersion': 1,
-          'createdAt': now,
-          'updatedAt': now,
-        });
-      }
-      if (assignCreatorAsChairman) {
-        transaction.set(reference.collection('memberships').doc(createdBy), {
-          'userId': createdBy,
-          'organizationId': reference.id,
-          'roleId': 'chairman',
-          'status': 'active',
-          'memberNumber': '001',
-          'permissionsSnapshot': const ['fullAccess'],
-          'approvedBy': createdBy,
-          'approvedAt': now,
-          'joinedAt': now,
-          'isPrimary': false,
-          'joinedReason': 'organizationBootstrap',
-        });
-      }
-      // سجل التدقيق (organization.created) يُكتب الآن خادميًّا عبر Cloud
-      // Function (auditOrganizationWrite). لم يعد العميل يكتب audit_logs.
+    final requestId = const Uuid().v4().replaceAll('-', '_');
+    final result =
+        await _functions.httpsCallable('bootstrapOrganization').call({
+      'requestId': requestId,
+      'officialNameArabic': data['officialNameArabic'],
+      'officialNameEnglish': data['officialNameEnglish'],
+      'shortName': data['shortName'],
+      'phone': data['phone'],
+      'email': data['email'],
+      'address': data['address'],
+      'googleMapsUrl': data['googleMapsUrl'],
+      if (assignCreatorAsChairman) 'chairmanUserId': createdBy,
     });
-    return reference.id;
+    return Map<String, dynamic>.from(result.data as Map)['organizationId']
+        as String;
   }
 
   Future<void> update({
@@ -247,11 +171,6 @@ class OrganizationRepository {
           .map((document) => _dataWithId(document, document.id)!)
           .where((organization) => organization['status'] == 'active')
           .toList();
-      if (organizations.isEmpty) {
-        unawaited(
-          OrganizationSeedService.instance.ensureSeeded().catchError((_) {}),
-        );
-      }
       organizations.sort((left, right) {
         final leftName = _sortName(left);
         final rightName = _sortName(right);
@@ -303,85 +222,14 @@ class OrganizationRepository {
         'Organization ID cannot be empty.',
       );
     }
-
-    final organizationReference = _organizations.doc(normalizedId);
-    final seed = OrganizationSeedService.instance;
-    final roleDefaults = seed.defaultRoles;
-    final requiredDocuments = <MapEntry<DocumentReference<Map<String, dynamic>>,
-        Map<String, dynamic>>>[
-      for (final role in roleDefaults.entries)
-        MapEntry(
-          organizationReference.collection('roles').doc(role.key),
-          role.value,
-        ),
-      MapEntry(
-        organizationReference.collection('memberships').doc('_meta'),
-        _metaDocument(),
-      ),
-      MapEntry(
-        organizationReference.collection('financial_profile').doc('banking'),
-        seed.bankingDefaults(),
-      ),
-      MapEntry(
-        organizationReference.collection('settings').doc('organization'),
-        seed.organizationSettingsDefaults(),
-      ),
-      MapEntry(
-        organizationReference.collection('settings').doc('location_maps'),
-        seed.locationDefaults(),
-      ),
-      for (final collection in const [
-        'membership_requests',
-        'announcements',
-        'events',
-        'rentals',
-        'rental_resources',
-      ])
-        MapEntry(
-          organizationReference.collection(collection).doc('_meta'),
-          _metaDocument(),
-        ),
-    ];
-
-    var succeededWrites = 0;
-    final failures = <OrganizationRepairFailure>[];
-
-    for (final entry in requiredDocuments) {
-      DocumentSnapshot<Map<String, dynamic>> snapshot;
-      try {
-        snapshot = await entry.key.get();
-      } on FirebaseException catch (exception, stackTrace) {
-        failures.add(_logFirebaseFailure(
-          operation: 'read-before-create',
-          reference: entry.key,
-          exception: exception,
-          stackTrace: stackTrace,
-        ));
-        continue;
-      }
-
-      if (snapshot.exists) continue;
-      debugPrint('Creating ${entry.key.parent.id}...');
-      try {
-        await entry.key.set(entry.value, SetOptions(merge: true));
-        succeededWrites++;
-      } on FirebaseException catch (exception, stackTrace) {
-        failures.add(_logFirebaseFailure(
-          operation: 'create-missing-document',
-          reference: entry.key,
-          exception: exception,
-          stackTrace: stackTrace,
-        ));
-      }
-    }
-
-    // إصلاح البنية عملية صيانة إدارية؛ لم يعد العميل يكتب audit_logs
-    // (ممنوع في Firestore Rules). أي مستندات فرعية أُنشئت أعلاه (أدوار/إعدادات)
-    // تُسجَّل تلقائيًا عبر مشغّلات Cloud Functions الخاصة بها.
+    final response =
+        await _functions.httpsCallable('repairOrganizationStructure').call({
+      'organizationId': normalizedId,
+    });
+    final data = Map<String, dynamic>.from(response.data as Map);
     return OrganizationRepairResult(
-      succeededWrites: succeededWrites,
-      failedWrites: failures.length,
-      failures: List.unmodifiable(failures),
+      succeededWrites: data['createdCount'] as int? ?? 0,
+      failedWrites: 0,
     );
   }
 
@@ -414,15 +262,6 @@ class OrganizationRepository {
       failedWrites: failedWrites,
       failures: List.unmodifiable(failures),
     );
-  }
-
-  Map<String, dynamic> _metaDocument() {
-    return {
-      'initialized': true,
-      'schemaVersion': 1,
-      'createdAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    };
   }
 
   OrganizationRepairFailure _logFirebaseFailure({
