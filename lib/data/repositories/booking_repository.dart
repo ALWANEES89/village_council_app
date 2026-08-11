@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/booking_model.dart';
 
@@ -52,21 +53,39 @@ class BookingRepository {
         .orderBy('bookingDate', descending: true)
         .snapshots()
         .map((snapshot) =>
-            snapshot.docs.map(BookingModel.fromFirestore).toList());
+            snapshot.docs.map(BookingModel.fromFirestore).toList())
+        .handleError((Object error, StackTrace stackTrace) {
+      // تشخيص آمن: استعلام حجوزات المستخدم يحتاج فهرسًا مركّبًا
+      // bookings(userId, bookingDate). غيابه في الإنتاج ⇒ failed-precondition.
+      // نُسجّل الكود ثم نُعيد رمي الخطأ حتى تبقى حالة الخطأ في الواجهة كما هي.
+      final code = error is FirebaseException ? error.code : error.runtimeType;
+      debugPrint('[Bookings] streamForUser FAILED code=$code '
+          'org=$organizationId (needs index userId+bookingDate)');
+      Error.throwWithStackTrace(error, stackTrace);
+    });
   }
 
   Future<List<BookingModel>> getAvailability({
     required String organizationId,
     required DateTime month,
   }) async {
-    final result =
-        await _functions.httpsCallable('getBookingAvailability').call({
-      'organizationId': organizationId,
-      'year': month.year,
-      'month': month.month,
-    });
-    final data = Map<String, dynamic>.from(result.data as Map);
-    return parseBookingAvailability(data, organizationId: organizationId);
+    try {
+      final result =
+          await _functions.httpsCallable('getBookingAvailability').call({
+        'organizationId': organizationId,
+        'year': month.year,
+        'month': month.month,
+      });
+      final data = Map<String, dynamic>.from(result.data as Map);
+      return parseBookingAvailability(data, organizationId: organizationId);
+    } on FirebaseFunctionsException catch (error) {
+      // تشخيص آمن: unauthenticated=App Check (Play Integrity غير متاح)، أو
+      // not-found=الدالة غير منشورة. بلا token أو بيانات شخصية.
+      debugPrint('[Bookings] getBookingAvailability FAILED '
+          'code=${error.code} message=${error.message} '
+          'plugin=${error.plugin} details=${error.details}');
+      rethrow;
+    }
   }
 
   Future<Map<String, dynamic>?> getGuestBookingCharge({

@@ -1,8 +1,8 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
+import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/financial_models.dart';
@@ -232,19 +232,30 @@ class FinancialRepository {
     String? pageToken;
     var pageCount = 0;
     do {
-      final result = await _functions
-          .httpsCallable('getPayableCharges')
-          .call<Map<String, dynamic>>({
-        'organizationId': organizationId,
-        'membershipIds': requestedMembershipIds,
-        'pageSize': 50,
-        if (pageToken != null) 'pageToken': pageToken,
-      });
-      final rows = (result.data['charges'] as List<dynamic>? ?? const [])
+      final Map<String, dynamic> data;
+      try {
+        final result = await _functions
+            .httpsCallable('getPayableCharges')
+            .call<Map<String, dynamic>>({
+          'organizationId': organizationId,
+          'membershipIds': requestedMembershipIds,
+          'pageSize': 50,
+          if (pageToken != null) 'pageToken': pageToken,
+        });
+        data = result.data;
+      } on FirebaseFunctionsException catch (error) {
+        // تشخيص آمن: نسجّل كود الاستثناء الأصلي (unauthenticated=App Check،
+        // failed-precondition، not-found، ...) دون أي token أو بيانات شخصية.
+        debugPrint('[Charges] getPayableCharges FAILED '
+            'code=${error.code} message=${error.message} '
+            'plugin=${error.plugin} details=${error.details}');
+        rethrow;
+      }
+      final rows = (data['charges'] as List<dynamic>? ?? const [])
           .whereType<Map<Object?, Object?>>();
       charges.addAll(rows.map(
           (row) => FinancialCharge.fromMap(Map<String, dynamic>.from(row))));
-      final next = result.data['nextPageToken'];
+      final next = data['nextPageToken'];
       pageToken = next is String && next.isNotEmpty ? next : null;
       pageCount += 1;
       if (pageToken != null && !seenTokens.add(pageToken)) {
