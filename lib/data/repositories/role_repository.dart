@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../core/auth/permission_policy.dart';
+
 class RoleRepository {
   RoleRepository({FirebaseFirestore? firestore})
       : _firestore = firestore ?? FirebaseFirestore.instance;
@@ -20,11 +22,12 @@ class RoleRepository {
     String? actorUserId,
   }) {
     final now = FieldValue.serverTimestamp();
+    final normalized = _normalizeData(roleId, data);
     return _roles(organizationId).doc(roleId).set({
-      ...data,
+      ...normalized,
       'roleId': roleId,
-      'createdAt': data['createdAt'] ?? now,
-      'updatedAt': data['updatedAt'] ?? now,
+      'createdAt': normalized['createdAt'] ?? now,
+      'updatedAt': normalized['updatedAt'] ?? now,
       // توثيق الفاعل حتى يظهر actorName/actorRole في سجل الأحداث الخادمي.
       if (actorUserId != null) 'createdBy': actorUserId,
       if (actorUserId != null) 'updatedBy': actorUserId,
@@ -37,13 +40,28 @@ class RoleRepository {
     required Map<String, dynamic> data,
     String? actorUserId,
   }) {
-    final updates = Map<String, dynamic>.from(data)
+    final updates = _normalizeData(roleId, data)
       ..remove('roleId')
       ..remove('createdAt')
       ..['updatedAt'] = FieldValue.serverTimestamp();
     // توثيق الفاعل: يقرؤه auditRoleWrite لإظهار من غيّر الصلاحيات.
     if (actorUserId != null) updates['updatedBy'] = actorUserId;
     return _roles(organizationId).doc(roleId).update(updates);
+  }
+
+  Map<String, dynamic> _normalizeData(
+    String roleId,
+    Map<String, dynamic> data,
+  ) {
+    final normalized = Map<String, dynamic>.from(data);
+    final permissions = normalized['permissions'];
+    if (permissions is Iterable) {
+      normalized['permissions'] = sanitizePermissionsForRole(
+        roleId,
+        permissions.whereType<String>(),
+      );
+    }
+    return normalized;
   }
 
   Future<void> delete({

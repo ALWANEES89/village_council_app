@@ -50,6 +50,14 @@ int baisaFrom(dynamic value, {dynamic legacyRialValue}) {
   return 0;
 }
 
+/// يعرض المسميات القديمة المختلطة بالعربية دون تعديل البيانات المخزنة.
+String localizeLegacyFinancialText(String value) {
+  return value
+      .replaceAll(RegExp(r'one[-_ ]time', caseSensitive: false), 'مرة واحدة')
+      .replaceAll(RegExp(r'\bmonthly\b', caseSensitive: false), 'شهري')
+      .replaceAll(RegExp(r'\bannual(?:ly)?\b', caseSensitive: false), 'سنوي');
+}
+
 DateTime? financialDate(dynamic value) {
   if (value is Timestamp) return value.toDate();
   if (value is DateTime) return value;
@@ -75,6 +83,7 @@ class FinancialSettings {
     this.onlinePaymentProvider,
     this.allowMonthlyPlans = true,
     this.allowAnnualPlans = true,
+    this.defaultSubscriptionPlanId,
     this.memberBookingFeeBaisa = 0,
     this.nonMemberBookingFeeBaisa = 0,
     this.eventBookingFeeBaisa = 0,
@@ -91,6 +100,7 @@ class FinancialSettings {
   final String? onlinePaymentProvider;
   final bool allowMonthlyPlans;
   final bool allowAnnualPlans;
+  final String? defaultSubscriptionPlanId;
   final int memberBookingFeeBaisa;
   final int nonMemberBookingFeeBaisa;
   final int eventBookingFeeBaisa;
@@ -119,6 +129,7 @@ class FinancialSettings {
       onlinePaymentProvider: data['onlinePaymentProvider'] as String?,
       allowMonthlyPlans: data['allowMonthlyPlans'] != false,
       allowAnnualPlans: data['allowAnnualPlans'] != false,
+      defaultSubscriptionPlanId: data['defaultSubscriptionPlanId'] as String?,
       memberBookingFeeBaisa: baisaFrom(data['memberBookingFeeBaisa'],
           legacyRialValue: data['memberBookingFee']),
       nonMemberBookingFeeBaisa: baisaFrom(data['nonMemberBookingFeeBaisa'],
@@ -140,6 +151,7 @@ class FinancialSettings {
         'onlinePaymentProvider': null,
         'allowMonthlyPlans': allowMonthlyPlans,
         'allowAnnualPlans': allowAnnualPlans,
+        'defaultSubscriptionPlanId': defaultSubscriptionPlanId,
         'memberBookingFeeBaisa': memberBookingFeeBaisa,
         'nonMemberBookingFeeBaisa': nonMemberBookingFeeBaisa,
         'eventBookingFeeBaisa': eventBookingFeeBaisa,
@@ -324,8 +336,9 @@ class FinancialCharge {
       sourceId: data['sourceId'] as String?,
       periodKey: data['periodKey'] as String?,
       idempotencyKey: data['idempotencyKey'] as String?,
-      titleArabic:
-          data['titleArabic'] as String? ?? data['title'] as String? ?? 'رسم',
+      titleArabic: localizeLegacyFinancialText(
+        data['titleArabic'] as String? ?? data['title'] as String? ?? 'رسم',
+      ),
       descriptionArabic: data['descriptionArabic'] as String?,
       amountDueBaisa: due,
       amountPaidBaisa: paid,

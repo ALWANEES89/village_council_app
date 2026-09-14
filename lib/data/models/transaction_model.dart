@@ -65,7 +65,9 @@ class ReceiptAllocation {
             map['beneficiaryMembershipId'] as String? ?? '',
         beneficiaryName: map['beneficiaryName'] as String? ?? '',
         chargeId: map['chargeId'] as String? ?? '',
-        chargeTitle: map['chargeTitle'] as String? ?? '',
+        chargeTitle: localizeLegacyFinancialText(
+          map['chargeTitle'] as String? ?? '',
+        ),
         amountAllocatedBaisa: baisaFrom(map['amountAllocatedBaisa'],
             legacyRialValue: map['amountAllocated']),
         balanceBeforeBaisa: baisaFrom(map['balanceBeforeBaisa'],

@@ -1,0 +1,322 @@
+{
+  "@@locale": "ar",
+  "appTitle": "مجلس القرية",
+  "councilDashboard": "لوحة المجلس",
+  "currentCouncil": "المجلس الحالي",
+  "switchCouncil": "تغيير المجلس",
+  "chooseCouncil": "اختر مجلسًا",
+  "noCouncilSelected": "لم يتم اختيار مجلس",
+  "returnHome": "العودة للرئيسية",
+  "welcomeBack": "مرحبًا بعودتك",
+  "member": "العضو",
+  "memberNumber": "رقم العضو",
+  "role": "الدور",
+  "status": "الحالة",
+  "active": "نشط",
+  "pending": "قيد المراجعة",
+  "approved": "معتمد",
+  "suspended": "معلّق",
+  "rejected": "مرفوض",
+  "cancelled": "ملغى",
+  "removed": "تمت الإزالة",
+  "resigned": "منسحب",
+  "platformAdministrator": "مشرف المنصة",
+  "councilOwnerRole": "مالك المجلس",
+  "chairmanRole": "رئيس المجلس",
+  "administrativeManagerRole": "مدير إداري",
+  "financialManagerRole": "مدير مالي",
+  "financialReviewerRole": "مراجع مالي",
+  "memberRole": "عضو",
+  "selectLanguage": "اختر اللغة",
+  "arabic": "العربية",
+  "english": "English",
+  "language": "اللغة",
+  "members": "عدد الأعضاء",
+  "upcomingBookings": "الحجوزات القادمة",
+  "receiptsPendingReview": "الإيصالات بانتظار المراجعة",
+  "outstandingSubscriptions": "الاشتراكات المستحقة",
+  "statisticsUnavailable": "غير متاح",
+  "dailyOperations": "العمل اليومي",
+  "dailyOperationsDescription": "الحجوزات والأعضاء والاشتراكات والتواصل",
+  "finance": "المالية",
+  "financeDescription": "رسوم المجلس والإيصالات والمتابعة المالية",
+  "councilManagement": "إدارة المجلس",
+  "councilManagementDescription": "بيانات المجلس والصلاحيات والإعدادات",
+  "bookings": "الحجوزات",
+  "membersManagement": "الأعضاء",
+  "subscriptions": "الاشتراكات",
+  "notifications": "الإشعارات",
+  "feesAndSubscriptions": "الرسوم والاشتراكات",
+  "receipts": "الإيصالات",
+  "paymentReview": "مراجعة المدفوعات",
+  "financialReports": "التقارير المالية",
+  "councilInformation": "بيانات المجلس",
+  "permissions": "الصلاحيات",
+  "councilSettings": "إعدادات المجلس",
+  "activityLog": "سجل النشاط",
+  "quickActions": "إجراءات سريعة",
+  "newBooking": "حجز جديد",
+  "uploadReceipt": "رفع إيصال",
+  "reviewReceipt": "مراجعة إيصال",
+  "manageMembers": "إدارة الأعضاء",
+  "recentActivity": "آخر الأنشطة",
+  "importantAlerts": "تنبيهات مهمة",
+  "noRecentActivity": "لا توجد أنشطة حديثة لهذا المجلس",
+  "noImportantAlerts": "كل الأمور محدثة",
+  "viewAllNotifications": "عرض كل الإشعارات",
+  "pendingReceiptsAlert": "إيصالات تحتاج إلى مراجعة",
+  "pendingBookingsAlert": "طلبات حجز تحتاج إلى مراجعة",
+  "overdueSubscriptionsAlert": "اشتراكات متأخرة عن السداد",
+  "itemsCount": "{count} عناصر",
+  "@itemsCount": {"placeholders": {"count": {"type": "int"}}},
+  "loading": "جارٍ التحميل…",
+  "retry": "إعادة المحاولة",
+  "couldNotLoad": "تعذر تحميل البيانات",
+  "couldNotSwitchCouncil": "تعذر تغيير المجلس",
+  "searchCouncils": "البحث عن مجلس",
+  "serviceComingSoon": "سيتم تفعيل هذه الخدمة قريبًا",
+  "noAdditionalInformation": "لا توجد بيانات إضافية",
+  "membershipStatus": "حالة الاشتراك",
+  "fullPlatformAccess": "دخول كامل لمشرف المنصة",
+  "generalPaymentReceipt": "إيصال دفع عام",
+  "openNavigation": "فتح قائمة التنقل",
+  "home": "الرئيسية",
+  "close": "إغلاق",
+  "today": "اليوم",
+  "yesterday": "أمس",
+  "localTestEnvironment": "بيئة اختبار محلية"
+  ,"systemAdministration": "لوحة إدارة النظام"
+  ,"systemAdministrationDescription": "إدارة المجالس والمستخدمين وإعدادات المنصة"
+  ,"systemAccessDenied": "لوحة إدارة النظام متاحة لمالك النظام فقط"
+  ,"totalCouncils": "إجمالي المجالس"
+  ,"activeCouncils": "المجالس النشطة"
+  ,"pendingActions": "طلبات تحتاج إجراء"
+  ,"pendingJoinRequests": "طلبات انضمام قيد المراجعة"
+  ,"createCouncil": "إنشاء مجلس جديد"
+  ,"manageCouncils": "إدارة المجالس"
+  ,"councilsInSystem": "المجالس في النظام"
+  ,"councilsInSystemDescription": "عرض وإدارة المجالس المسجلة في المنصة"
+  ,"noCouncils": "لا توجد مجالس مسجلة"
+  ,"systemHome": "الرئيسية العامة"
+  ,"systemAlerts": "تنبيهات النظام"
+  ,"noSystemAlerts": "لا توجد تنبيهات نظام تحتاج إلى إجراء"
+  ,"pendingActionsAlert": "طلبات انضمام في المجالس تحتاج إلى مراجعة"
+  ,"archived": "مؤرشف"
+  ,"inactive": "غير نشط"
+  ,"createdOn": "تاريخ الإنشاء"
+  ,"openCouncil": "فتح المجلس"
+  ,"manage": "إدارة"
+  ,"couldNotOpenCouncil": "تعذر فتح هذا المجلس"
+  ,"backToSystemAdministration": "العودة إلى إدارة النظام"
+  ,"systemOwner": "مالك النظام"
+  ,"profile": "الملف الشخصي"
+  ,"unavailable": "غير متاح"
+  ,"mainHome": "الرئيسية"
+  ,"welcomeUser": "مرحبًا، {name}"
+  ,"@welcomeUser": {"placeholders": {"name": {"type": "String"}}}
+  ,"myAccount": "حسابي"
+  ,"payments": "المدفوعات"
+  ,"services": "الخدمات"
+  ,"upcomingBooking": "حجزك القادم"
+  ,"noUpcomingBooking": "لا يوجد لديك حجز قادم"
+  ,"bookNow": "احجز الآن"
+  ,"viewDetails": "عرض التفاصيل"
+  ,"outstandingAmount": "المبلغ المستحق"
+  ,"latestNotification": "آخر إشعار"
+  ,"noNotifications": "لا توجد إشعارات حتى الآن"
+  ,"markAllAsRead": "قراءة الكل"
+  ,"signInToViewNotifications": "سجّل الدخول لعرض الإشعارات"
+  ,"couldNotLoadNotifications": "تعذر تحميل الإشعارات. حاول مرة أخرى."
+  ,"couldNotUpdateNotification": "تعذر تحديث الإشعار. حاول مرة أخرى."
+  ,"councilDashboardDescription": "إدارة المجلس والعمليات والمالية"
+  ,"accountSection": "الحساب"
+  ,"personalInformation": "المعلومات الشخصية"
+  ,"securityAndPassword": "الأمان وكلمة المرور"
+  ,"notificationSettings": "إعدادات الإشعارات"
+  ,"councilsAndMemberships": "المجالس والعضويات"
+  ,"myCouncils": "مجالسي"
+  ,"membershipsAndRoles": "عضوياتي وأدواري"
+  ,"membershipDetails": "بيانات العضوية"
+  ,"myPaymentsAndReceipts": "مدفوعاتي وإيصالاتي"
+  ,"mySubscriptions": "اشتراكاتي"
+  ,"help": "المساعدة"
+  ,"contactUs": "تواصل معنا"
+  ,"legal": "قانوني"
+  ,"aboutApp": "حول التطبيق"
+  ,"editProfile": "تعديل الملف الشخصي"
+  ,"signOut": "تسجيل الخروج"
+  ,"basicMember": "عضو"
+  ,"noActiveMembership": "لا توجد عضوية نشطة"
+  ,"chooseCouncilForService": "اختر مجلسًا للمتابعة"
+  ,"bookingDate": "تاريخ الحجز"
+  ,"occasion": "المناسبة"
+  ,"currentCouncil": "المجلس الحالي"
+  ,"membershipRole": "دور العضوية"
+  ,"notAvailableYet": "غير متاح حاليًا"
+  ,"joinCouncil": "طلب الانضمام إلى مجلس"
+  ,"councilBookings": "حجوزات المجلس"
+  ,"accessDenied": "لا تملك صلاحية الوصول"
+  ,"approvedUpcomingBookings": "الحجوزات المؤكدة القادمة"
+  ,"noUpcomingBookings": "لا توجد حجوزات قادمة"
+  ,"bookingNumber": "الحجز رقم {number}"
+  ,"@bookingNumber": {"placeholders": {"number": {"type": "String"}}}
+  ,"bookingStatus": "حالة الحجز"
+  ,"approved": "معتمد"
+  ,"additionalRequests": "طلبات إضافية: {count}"
+  ,"@additionalRequests": {"placeholders": {"count": {"type": "int"}}}
+  ,"sendNotification": "إرسال إشعار"
+  ,"confirmSendNotification": "تأكيد إرسال الإشعار"
+  ,"sendToAllCouncilMembers": "سيصل الإشعار إلى جميع الأعضاء النشطين في المجلس الحالي فقط."
+  ,"send": "إرسال"
+  ,"notificationSentTo": "تم إرسال الإشعار إلى {count} عضو"
+  ,"@notificationSentTo": {"placeholders": {"count": {"type": "int"}}}
+  ,"couldNotSendNotification": "تعذر إرسال الإشعار"
+  ,"serviceUnavailable": "الخدمة غير متاحة في إصدار الخادم الحالي"
+  ,"notificationTitle": "عنوان الإشعار"
+  ,"notificationBody": "نص الإشعار"
+  ,"requiredField": "هذا الحقل مطلوب"
+  ,"expenses": "المصروفات"
+  ,"addExpense": "إضافة مصروف"
+  ,"noExpenses": "لا توجد مصروفات مسجلة"
+  ,"couldNotSaveExpense": "تعذر حفظ المصروف"
+  ,"expenseDescription": "وصف المصروف"
+  ,"amountOmr": "المبلغ بالريال العماني"
+  ,"invalidPositiveAmount": "أدخل مبلغًا موجبًا صالحًا حتى ثلاث خانات عشرية"
+  ,"expenseCategory": "تصنيف المصروف"
+  ,"expenseDate": "تاريخ المصروف"
+  ,"supplier": "الجهة أو المورد (اختياري)"
+  ,"invoiceNumber": "رقم الفاتورة (اختياري)"
+  ,"notes": "ملاحظات"
+  ,"save": "حفظ"
+  ,"expenseBills": "فواتير"
+  ,"expenseElectricity": "كهرباء"
+  ,"expenseWater": "ماء"
+  ,"expenseCommunications": "اتصالات"
+  ,"expenseSupplies": "مشتريات"
+  ,"expenseMaintenance": "صيانة"
+  ,"expenseCleaning": "تنظيف"
+  ,"expenseEquipment": "تجهيزات"
+  ,"expenseHospitality": "ضيافة"
+  ,"expenseOther": "أخرى"
+  ,"thisMonth": "هذا الشهر"
+  ,"previousMonth": "الشهر السابق"
+  ,"thisYear": "هذا العام"
+  ,"customPeriod": "فترة مخصصة"
+  ,"totalCollected": "إجمالي المحصل"
+  ,"totalOutstanding": "إجمالي المستحق"
+  ,"bookingRevenue": "إيرادات الحجوزات"
+  ,"packageRevenue": "إيرادات الباقات والإضافات"
+  ,"totalExpenses": "إجمالي المصروفات"
+  ,"netPosition": "صافي الوضع المالي"
+  ,"membersPaid": "الأعضاء الذين دفعوا"
+  ,"membersUnpaid": "الأعضاء غير المسددين"
+  ,"membershipRevenue": "إيرادات العضويات"
+  ,"expenseBreakdown": "تفصيل المصروفات"
+  ,"reviewedBy": "راجع بواسطة"
+  ,"bookedDate": "تاريخ محجوز"
+  ,"bookedDateRequestWarning": "هذا التاريخ يحتوي على حجز مؤكد. يمكنك إرسال طلب حجز، وسيتم مراجعته من إدارة المجلس."
+  ,"continueAction": "متابعة"
+  ,"booked": "محجوز"
+  ,"expenseAttachment": "مرفق الفاتورة أو الإيصال"
+  ,"optionalPdfOrImage": "اختياري — صورة أو PDF حتى 10 ميجابايت"
+  ,"edit": "تعديل"
+  ,"confirm": "تأكيد"
+  ,"cancelExpense": "إلغاء المصروف"
+  ,"cancelExpenseConfirmation": "سيبقى المصروف محفوظًا في السجل لكنه لن يدخل في الإجماليات. هل تريد المتابعة؟"
+  ,"cancel": "إلغاء"
+  ,"couldNotUpdateNotification": "تعذر تحديث الإشعار. حاول مرة أخرى."
+  ,"transactionDetails": "تفاصيل المعاملة"
+  ,"noCurrentCouncil": "لا يوجد مجلس محدد حاليًا."
+  ,"couldNotLoadTransaction": "تعذر تحميل المعاملة."
+  ,"transactionNotFound": "لم يتم العثور على المعاملة."
+  ,"couldNotOpenReceipt": "تعذر فتح الإيصال. تحقق من الصلاحية والملف."
+  ,"secureReceiptServiceUnavailable": "خدمة فتح الإيصال الآمن غير متاحة في إصدار الخادم الحالي."
+  ,"rejectionReason": "سبب الرفض"
+  ,"receiptAllocation": "توزيع الإيصال"
+  ,"openingReceipt": "جارٍ فتح الإيصال..."
+  ,"viewReceiptFile": "عرض ملف الإيصال"
+  ,"transactionPath": "مسار المعاملة"
+  ,"receiptSubmittedStep": "تم إرسال الإيصال"
+  ,"receiptReviewStep": "مراجعة المبلغ والتوزيع"
+  ,"receiptRejectedStep": "تم رفض الإيصال"
+  ,"receiptAllocationApprovedStep": "تم اعتماد التوزيع"
+  ,"loginSubtitle": "اشتراكات وخدمات المجالس"
+  ,"phoneNumber": "رقم الهاتف"
+  ,"password": "كلمة المرور"
+  ,"enterPhoneNumber": "أدخل رقم الهاتف"
+  ,"phoneMustBeEightDigits": "رقم الهاتف يجب أن يتكون من 8 أرقام"
+  ,"enterPassword": "أدخل كلمة المرور"
+  ,"login": "تسجيل الدخول"
+  ,"loginInstructions": "أدخل رقم هاتفك وكلمة المرور للمتابعة"
+  ,"createNewAccount": "إنشاء حساب جديد"
+  ,"accountDataNotFound": "تعذر العثور على بيانات الحساب. تواصل مع إدارة المجلس."
+  ,"invalidLoginCredentials": "رقم الهاتف أو كلمة المرور غير صحيحة"
+  ,"findAndJoinCouncil": "ابحث عن مجلس وانضم إليه"
+  ,"findCouncilDescription": "ابحث في المجالس المتاحة وأرسل طلب عضوية."
+  ,"searchByCouncilName": "ابحث باسم المجلس"
+  ,"noMatchingCouncils": "لا يوجد مجلس مطابق لبحثك"
+  ,"noCouncilsAvailableToJoin": "لا توجد مجالس متاحة للانضمام حاليًا"
+  ,"requestToJoin": "طلب انضمام"
+  ,"joinAnotherCouncil": "الانضمام إلى مجلس آخر"
+  ,"joinRequestSent": "تم إرسال طلب الانضمام"
+  ,"joinRequestPending": "بانتظار الموافقة"
+  ,"joinRequestApproved": "تمت الموافقة"
+  ,"joinRequestRejected": "مرفوض"
+  ,"joinRequestAlreadyPending": "لديك طلب انضمام قيد المراجعة لهذا المجلس"
+  ,"activeMembershipAlreadyExists": "لديك عضوية نشطة في هذا المجلس"
+  ,"couldNotSendJoinRequest": "تعذر إرسال طلب الانضمام. حاول مرة أخرى."
+  ,"alreadyJoined": "منضم"
+  ,"couldNotLoadAccount": "تعذر تحميل بيانات حسابك. حاول مرة أخرى."
+  ,"couldNotFindUser": "تعذر العثور على بيانات المستخدم"
+  ,"couldNotLoadProfile": "تعذر تحميل الملف الشخصي. حاول مرة أخرى."
+  ,"couldNotLoadCouncils": "تعذر تحميل المجالس المتاحة"
+  ,"couldNotLoadJoinRequests": "تعذر تحميل طلبات الانضمام"
+  ,"optionalJoinReason": "سبب الانضمام (اختياري)"
+  ,"applicantDetails": "بيانات مقدم الطلب"
+  ,"civilId": "الرقم المدني"
+  ,"phone": "الهاتف"
+  ,"email": "البريد الإلكتروني"
+  ,"address": "العنوان"
+  ,"council": "المجلس"
+  ,"sendRequest": "إرسال الطلب"
+  ,"invalidJoinCode": "رمز الانضمام غير صالح أو منتهي"
+  ,"notificationAuthRequired": "انتهت جلسة الدخول. سجّل الدخول ثم حاول مجددًا."
+  ,"notificationPermissionDenied": "لا تملك صلاحية إرسال إشعارات للمجلس الحالي."
+  ,"notificationRateLimited": "تم تجاوز عدد المحاولات المسموح. انتظر قليلًا ثم حاول مجددًا."
+  ,"notificationNetworkError": "تعذر الاتصال بخدمة الإشعارات. تحقق من الإنترنت ثم حاول مجددًا."
+  ,"notificationInvalidData": "بيانات الإشعار غير صالحة. راجعها ثم حاول مجددًا."
+  ,"notificationAlreadySent": "تم إرسال هذا الإشعار مسبقًا."
+  ,"notificationSecurityVerificationFailed": "تعذر التحقق من الجلسة الآمنة. حاول مجددًا، وإذا استمرت المشكلة فتواصل مع الدعم."
+  ,"receiptReviewTitle": "مراجعة الإيصالات"
+  ,"noReceiptReviewPermission": "لا تملك صلاحية مراجعة إيصالات هذا المجلس."
+  ,"receiptsLoadRetry": "تعذر تحميل الإيصالات. أعد المحاولة."
+  ,"noPendingReceipts": "لا توجد إيصالات قيد المراجعة."
+  ,"receiptApprovedAndAllocated": "تم اعتماد الإيصال وتوزيع المبلغ على الرسوم."
+  ,"receiptApprovalFailed": "تعذر الاعتماد. قد يكون رصيد أحد الرسوم قد تغير."
+  ,"receiptApprovalUnavailable": "خدمة اعتماد الإيصالات غير متاحة في إصدار الخادم الحالي."
+  ,"receiptRejectionReason": "سبب رفض الإيصال"
+  ,"receiptRejectionReasonHint": "اكتب سببًا واضحًا وإلزاميًا"
+  ,"rejectReceipt": "رفض الإيصال"
+  ,"receiptRejectedWithoutPayment": "تم رفض الإيصال دون خصم أي مبلغ."
+  ,"receiptRejectionFailed": "تعذر رفض الإيصال. حاول مجددًا."
+  ,"receiptReviewUnavailable": "خدمة مراجعة الإيصالات غير متاحة في إصدار الخادم الحالي."
+  ,"receiptOpenFailed": "تعذر فتح الإيصال. تحقق من الصلاحية والملف."
+  ,"receiptOpenUnavailable": "خدمة فتح الإيصال الآمن غير متاحة في إصدار الخادم الحالي."
+  ,"membershipNumberValue": "رقم العضوية: {value}"
+  ,"@membershipNumberValue": {"placeholders":{"value":{"type":"String"}}}
+  ,"submittedAtValue": "أُرسل: {value}"
+  ,"@submittedAtValue": {"placeholders":{"value":{"type":"String"}}}
+  ,"payerEnteredAmount": "المبلغ الذي أدخله الدافع"
+  ,"allocationTotal": "إجمالي التوزيع:"
+  ,"amountDifference": "الفرق:"
+  ,"amountMatchesAllocation": "المبلغ مطابق للتوزيع"
+  ,"incompleteReceiptApprovalDisabled": "بيانات الإيصال غير مكتملة - الاعتماد معطل"
+  ,"differenceApprovalDisabled": "يوجد فرق - الاعتماد معطل"
+  ,"paidBeneficiariesCount": "الأعضاء المدفوع عنهم ({count})"
+  ,"@paidBeneficiariesCount": {"placeholders":{"count":{"type":"int"}}}
+  ,"balanceAtSubmission": "الرصيد عند الإرسال:"
+  ,"openPdfFile": "فتح ملف PDF"
+  ,"viewReceiptImage": "عرض صورة الإيصال"
+  ,"reject": "رفض"
+  ,"approve": "اعتماد"
+}

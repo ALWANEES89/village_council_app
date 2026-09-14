@@ -5,8 +5,10 @@ import 'package:uuid/uuid.dart';
 
 import '../core/auth/admin_access.dart';
 import '../core/context/organization_context.dart';
+import '../core/errors/firebase_function_error_message.dart';
 import '../data/models/app_notification_model.dart';
 import '../data/models/booking_model.dart';
+import '../data/models/council_management_models.dart';
 import '../data/models/financial_models.dart';
 import '../data/models/member_model.dart';
 import '../data/models/membership_model.dart';
@@ -14,6 +16,7 @@ import '../data/models/payment_model.dart';
 import '../data/models/transaction_model.dart';
 import '../data/models/user_profile_model.dart';
 import '../data/repositories/booking_repository.dart';
+import '../data/repositories/council_management_repository.dart';
 import '../data/repositories/financial_receipt_repository.dart';
 import '../data/repositories/financial_repository.dart';
 import '../data/repositories/membership_repository.dart';
@@ -22,6 +25,7 @@ import '../data/repositories/organization_repository.dart';
 import '../data/repositories/platform_admin_repository.dart';
 import '../data/repositories/role_repository.dart';
 import '../data/repositories/user_repository.dart';
+import '../domain/dashboard/system_dashboard_metrics.dart';
 import '../data/services/auth_service.dart';
 import '../data/services/firestore_service.dart';
 import '../data/services/storage_service.dart';
@@ -41,6 +45,8 @@ final financialReceiptRepositoryProvider =
     Provider((ref) => FinancialReceiptRepository());
 final financialRepositoryProvider = Provider((ref) => FinancialRepository());
 final bookingRepositoryProvider = Provider((ref) => BookingRepository());
+final councilManagementRepositoryProvider =
+    Provider((ref) => CouncilManagementRepository());
 final notificationRepositoryProvider =
     Provider((ref) => NotificationRepository());
 
@@ -87,6 +93,25 @@ final bookingAvailabilityProvider = FutureProvider.autoDispose
       ),
 );
 
+final councilExpensesProvider = StreamProvider.autoDispose
+    .family<List<CouncilExpense>, String>((ref, organizationId) => ref
+        .watch(councilManagementRepositoryProvider)
+        .streamExpenses(organizationId));
+
+typedef CouncilActivityLookup = ({
+  String organizationId,
+  String entityType,
+  String entityId,
+});
+
+final councilActivityDetailProvider = FutureProvider.autoDispose
+    .family<CouncilActivityDetail, CouncilActivityLookup>((ref, lookup) =>
+        ref.watch(councilManagementRepositoryProvider).getActivityDetail(
+              organizationId: lookup.organizationId,
+              entityType: lookup.entityType,
+              entityId: lookup.entityId,
+            ));
+
 final pendingFinancialReceiptsProvider =
     StreamProvider.family<List<TransactionModel>, String>(
   (ref, organizationId) => ref
@@ -130,7 +155,52 @@ final activeUserMembershipsProvider =
 );
 
 final organizationsProvider = StreamProvider<List<Map<String, dynamic>>>(
-  (ref) => ref.watch(organizationRepositoryProvider).streamAll(),
+  (ref) {
+    final userId =
+        ref.watch(authStateProvider.select((state) => state.valueOrNull?.uid));
+    if (userId == null) return Stream.value(const <Map<String, dynamic>>[]);
+    return ref.watch(organizationRepositoryProvider).streamAll();
+  },
+);
+
+final allOrganizationsProvider = StreamProvider<List<Map<String, dynamic>>>(
+  (ref) =>
+      ref.watch(organizationRepositoryProvider).streamAllIncludingInactive(),
+);
+
+final systemDashboardSummaryProvider =
+    FutureProvider.autoDispose<SystemDashboardSummary>((ref) async {
+  final organizations = await ref.watch(allOrganizationsProvider.future);
+  final repository = ref.watch(organizationRepositoryProvider);
+  final entries = await Future.wait(
+    organizations.map((organization) async {
+      final organizationId = organization['organizationId'] as String;
+      try {
+        final counts = await repository.getOrganizationCounts(organizationId);
+        return MapEntry<String, Map<String, int>?>(organizationId, counts);
+      } catch (_) {
+        return MapEntry<String, Map<String, int>?>(organizationId, null);
+      }
+    }),
+  );
+  return buildSystemDashboardSummary(
+    organizations: organizations,
+    countsByOrganization: Map.fromEntries(entries),
+  );
+});
+
+final organizationCountsProvider =
+    FutureProvider.autoDispose.family<Map<String, int>, String>(
+  (ref, organizationId) => ref
+      .watch(organizationRepositoryProvider)
+      .getOrganizationCounts(organizationId),
+);
+
+final councilDashboardMetricsProvider =
+    FutureProvider.autoDispose.family<Map<String, int>, String>(
+  (ref, organizationId) => ref
+      .watch(organizationRepositoryProvider)
+      .getCouncilDashboardMetrics(organizationId),
 );
 
 final organizationDetailsProvider =
@@ -145,6 +215,19 @@ final currentMemberProvider = FutureProvider<MemberModel?>((ref) async {
   return ref.read(authServiceProvider).getCurrentMember();
 });
 
+/// Platform-level access, intentionally independent from the selected council.
+final systemOwnerAccessProvider = FutureProvider<bool>((ref) async {
+  final user = ref.watch(authStateProvider).value;
+  if (user == null) return false;
+  try {
+    return await ref
+        .read(platformAdminRepositoryProvider)
+        .isActiveSuperAdmin(user.uid);
+  } catch (_) {
+    return false;
+  }
+});
+
 final adminAccessProvider = FutureProvider<AdminAccess>((ref) async {
   final user = ref.watch(authStateProvider).value;
   if (user == null) return const AdminAccess();
@@ -153,12 +236,7 @@ final adminAccessProvider = FutureProvider<AdminAccess>((ref) async {
   try {
     member = await ref.watch(currentMemberProvider.future);
   } catch (_) {}
-  var isSuperAdmin = false;
-  try {
-    isSuperAdmin = await ref
-        .read(platformAdminRepositoryProvider)
-        .isActiveSuperAdmin(user.uid);
-  } catch (_) {}
+  final isSuperAdmin = await ref.watch(systemOwnerAccessProvider.future);
   final membership = organizationContext.currentMembership;
   return AdminAccess(
     isSuperAdmin: isSuperAdmin,
@@ -322,8 +400,13 @@ class UploadNotifier extends StateNotifier<UploadState> {
         }
       }
       debugPrint('[Receipts] upload failed type=${error.runtimeType}');
-      state = const UploadState(
-        error: 'تعذر إرسال الإيصال. تحقق من الملف والمبلغ ثم حاول مجددًا.',
+      state = UploadState(
+        error: firebaseFunctionErrorMessage(
+          error,
+          fallback: 'تعذر إرسال الإيصال. تحقق من الملف والمبلغ ثم حاول مجددًا.',
+          unavailableMessage:
+              'خدمة إرسال الإيصالات غير متاحة في إصدار الخادم الحالي.',
+        ),
       );
       return false;
     }

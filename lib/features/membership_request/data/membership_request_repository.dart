@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../../core/auth/permission_policy.dart';
 import '../../../data/services/organization_seed_service.dart';
 import 'membership_request_model.dart';
 
@@ -10,7 +11,12 @@ class DuplicatePendingMembershipRequestException implements Exception {
   String toString() => 'A pending membership request already exists.';
 }
 
-class MembershipRequestRepository {
+abstract interface class MembershipRequestSubmissionRepository {
+  Future<void> submit(MembershipRequestModel request);
+}
+
+class MembershipRequestRepository
+    implements MembershipRequestSubmissionRepository {
   MembershipRequestRepository({FirebaseFirestore? firestore})
       : _firestore = firestore ?? FirebaseFirestore.instance;
 
@@ -23,6 +29,7 @@ class MembershipRequestRepository {
         .collection('membership_requests');
   }
 
+  @override
   Future<void> submit(MembershipRequestModel request) async {
     if (request.requestId != request.userId) {
       throw ArgumentError.value(
@@ -158,9 +165,12 @@ class MembershipRequestRepository {
       final roleSnapshot = await transaction.get(roleReference);
       final roleData = roleSnapshot.data() ??
           OrganizationSeedService.instance.defaultRoles[assignedRoleId]!;
-      final permissions = List<String>.from(
-        roleData['permissions'] as List<dynamic>? ?? const [],
-      )..sort();
+      final permissions = sanitizePermissionsForRole(
+        assignedRoleId,
+        List<String>.from(
+          roleData['permissions'] as List<dynamic>? ?? const [],
+        ),
+      );
 
       final existingMembership = await transaction.get(membershipReference);
       final existingMembershipData = existingMembership.data();
@@ -191,7 +201,7 @@ class MembershipRequestRepository {
             'approvedBy': reviewedBy,
             'approvedAt': now,
             'isPrimary': existingMembershipData?['isPrimary'] == true,
-            'permissionsSnapshot': permissions.toSet().toList(),
+            'permissionsSnapshot': permissions,
             'joinedReason': 'membershipRequest',
             'invitedBy': null,
             // إعادة القبول تبدأ عضوية نظيفة: نمسح كل حقول الطرد/المغادرة السابقة

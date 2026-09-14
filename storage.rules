@@ -64,6 +64,20 @@ service firebase.storage {
       allow update, delete: if false;
     }
 
+    match /organizations/{organizationId}/expenses/{expenseId}/{fileName} {
+      allow read: if canViewFinancialReports(organizationId);
+      allow create: if canManageExpenses(organizationId) &&
+        request.resource.metadata.organizationId == organizationId &&
+        request.resource.metadata.expenseId == expenseId &&
+        request.resource.metadata.uploaderUid == request.auth.uid &&
+        request.resource.size <= 10 * 1024 * 1024 &&
+        request.resource.contentType in [
+          'image/jpeg', 'image/png', 'image/webp', 'application/pdf'
+        ];
+      allow update: if false;
+      allow delete: if canManageExpenses(organizationId);
+    }
+
     // ── دوال مساعدة ─────────────────────────────────────────────────────────
     // مهم: في Storage Rules يجب تعريف الدوال **داخل** كتلة match؛ تعريفها على
     // مستوى service (خارج match /b/{bucket}/o) يُفشل تصريف الملف بالكامل فيُرفض
@@ -102,6 +116,53 @@ service firebase.storage {
 
     function isSuperAdmin() {
       return isSystemOwner();
+    }
+
+    function accessPath(organizationId) {
+      return /databases/(default)/documents/organizations/$(organizationId)/member_access/$(request.auth.uid);
+    }
+
+    function legacyMembershipPath(organizationId) {
+      return /databases/(default)/documents/organizations/$(organizationId)/memberships/$(request.auth.uid);
+    }
+
+    function activeMembership(organizationId) {
+      return request.auth != null &&
+        ((firestore.exists(accessPath(organizationId)) &&
+          firestore.get(accessPath(organizationId)).data.get('status', '') == 'active') ||
+         (!firestore.exists(accessPath(organizationId)) &&
+          firestore.exists(legacyMembershipPath(organizationId)) &&
+          firestore.get(legacyMembershipPath(organizationId)).data.get('status', '') == 'active'));
+    }
+
+    function membershipHasAny(organizationId, permissions) {
+      return activeMembership(organizationId) &&
+        ((firestore.exists(accessPath(organizationId)) &&
+          firestore.get(accessPath(organizationId)).data.get('permissionsSnapshot', []).hasAny(permissions)) ||
+         (!firestore.exists(accessPath(organizationId)) &&
+          firestore.get(legacyMembershipPath(organizationId)).data.get('permissionsSnapshot', []).hasAny(permissions)));
+    }
+
+    function membershipRoleIn(organizationId, roles) {
+      return activeMembership(organizationId) &&
+        ((firestore.exists(accessPath(organizationId)) &&
+          (firestore.get(accessPath(organizationId)).data.get('roleId', '') in roles ||
+           firestore.get(accessPath(organizationId)).data.get('role', '') in roles)) ||
+         (!firestore.exists(accessPath(organizationId)) &&
+          (firestore.get(legacyMembershipPath(organizationId)).data.get('roleId', '') in roles ||
+           firestore.get(legacyMembershipPath(organizationId)).data.get('role', '') in roles)));
+    }
+
+    function canManageExpenses(organizationId) {
+      return isSystemOwner() ||
+        membershipRoleIn(organizationId, ['owner', 'council_owner', 'chairman', 'financialManager']) ||
+        membershipHasAny(organizationId, ['fullAccess', 'expenses.manage', 'payments.manage']);
+    }
+
+    function canViewFinancialReports(organizationId) {
+      return isSystemOwner() || canManageExpenses(organizationId) ||
+        membershipRoleIn(organizationId, ['financialReviewer']) ||
+        membershipHasAny(organizationId, ['reports.view', 'payments.read', 'receipts.review']);
     }
 
   }

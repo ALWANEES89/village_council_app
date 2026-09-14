@@ -88,6 +88,18 @@ final class FinancialReceiptBytesAccess extends FinancialReceiptAccess {
   final Uint8List bytes;
 }
 
+final class CouncilSubscriptionSaveResult {
+  const CouncilSubscriptionSaveResult({
+    required this.planId,
+    required this.accountsSynced,
+    required this.chargesCreated,
+  });
+
+  final String planId;
+  final int accountsSynced;
+  final int chargesCreated;
+}
+
 class FinancialRepository {
   FinancialRepository(
       {FirebaseFirestore? firestore, FirebaseFunctions? functions})
@@ -332,7 +344,7 @@ class FinancialRepository {
     });
   }
 
-  Future<void> saveSettings(FinancialSettings settings, String actorId) async {
+  Future<void> saveSettings(FinancialSettings settings) async {
     await _functions.httpsCallable('updateFinancialSettings').call<void>({
       'requestId': _uuid.v4(),
       'organizationId': settings.organizationId,
@@ -344,6 +356,31 @@ class FinancialRepository {
       'nonMemberBookingFeeBaisa': settings.nonMemberBookingFeeBaisa,
       'eventBookingFeeBaisa': settings.eventBookingFeeBaisa,
     });
+  }
+
+  Future<CouncilSubscriptionSaveResult> configureCouncilSubscription({
+    required String organizationId,
+    required bool subscriptionEnabled,
+    String? planId,
+    BillingCycle? billingCycle,
+    int? amountBaisa,
+  }) async {
+    final response = await _functions
+        .httpsCallable('configureCouncilSubscription')
+        .call<Map<String, dynamic>>({
+      'requestId': _uuid.v4(),
+      'organizationId': organizationId,
+      'subscriptionEnabled': subscriptionEnabled,
+      if (planId != null) 'planId': planId,
+      if (subscriptionEnabled) 'billingCycle': billingCycle?.name,
+      if (subscriptionEnabled) 'amountBaisa': amountBaisa,
+    });
+    final data = response.data;
+    return CouncilSubscriptionSaveResult(
+      planId: data['planId'] as String? ?? '',
+      accountsSynced: (data['accountsSynced'] as num?)?.toInt() ?? 0,
+      chargesCreated: (data['chargesCreated'] as num?)?.toInt() ?? 0,
+    );
   }
 
   Future<void> savePlan({

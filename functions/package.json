@@ -3,7 +3,7 @@
   "description": "Cloud Functions for village council app",
   "scripts": {
     "build": "echo 'no build step'",
-    "test": "node --test financial.test.js",
+    "test": "node --test financial.test.js council_management.test.js",
     "test:emulator": "node --test financial_emulator.test.js",
     "deploy": "firebase deploy --only functions"
   },

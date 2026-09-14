@@ -94,10 +94,11 @@ class OmrAmount extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             OmrSymbol(
-              height: fontSize,
+              height: fontSize * 0.86,
               color: effectiveStyle.color,
               useWhiteAsset: useWhiteSymbol,
             ),
+            SizedBox(width: (fontSize * 0.2).clamp(2.5, 4.0)),
             Text(number, style: effectiveStyle),
           ],
         ),
@@ -176,8 +177,8 @@ InputDecoration omrAmountInputDecoration({
       helperText: helperText,
       hintText: hintText,
       prefixIcon: const Padding(
-        padding: EdgeInsets.all(14),
-        child: OmrSymbol(height: 20),
+        padding: EdgeInsets.all(15),
+        child: OmrSymbol(height: 17),
       ),
       prefixIconConstraints: const BoxConstraints(minWidth: 48, minHeight: 48),
     );

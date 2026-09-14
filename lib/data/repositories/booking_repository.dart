@@ -42,8 +42,15 @@ class BookingRepository {
           .collection('bookings');
 
   Stream<List<BookingModel>> streamForOrganization(String organizationId) {
-    return _bookings(organizationId).orderBy('bookingDate').snapshots().map(
-        (snapshot) => snapshot.docs.map(BookingModel.fromFirestore).toList());
+    // لا نرتب داخل Firestore: orderBy('bookingDate') يستبعد تلقائيًا حجوزات
+    // legacy التي لم تحفظ ذلك الحقل. الاستعلام يبقى مقيدًا بمجلس واحد، ثم
+    // نرتب محليًا بعد قراءة كل الحجوزات المسموح للمراجع برؤيتها.
+    return _bookings(organizationId).snapshots().map((snapshot) {
+      final bookings = snapshot.docs.map(BookingModel.fromFirestore).toList();
+      bookings.sort((first, second) =>
+          first.bookingDate.compareTo(second.bookingDate));
+      return bookings;
+    });
   }
 
   Stream<List<BookingModel>> streamForUser(
@@ -136,6 +143,7 @@ class BookingRepository {
     required String requesterName,
     required String requesterPhone,
     required DateTime bookingDate,
+    String bookingCategory = 'regular',
     required String occasionType,
     required String notes,
     String? startTime,
@@ -152,6 +160,7 @@ class BookingRepository {
       'requesterName': requesterName,
       'requesterPhone': requesterPhone,
       'bookingDate': day,
+      'bookingCategory': bookingCategory,
       if (startTime?.trim().isNotEmpty == true) 'startTime': startTime!.trim(),
       if (endTime?.trim().isNotEmpty == true) 'endTime': endTime!.trim(),
       'occasionType': occasionType.trim(),
@@ -191,11 +200,15 @@ class BookingRepository {
     required String organizationId,
     required String bookingId,
     required String reviewedBy,
+    bool waiveFinancialCharge = false,
+    String waiverReason = '',
   }) async {
     await _functions.httpsCallable('reviewBooking').call({
       'organizationId': organizationId,
       'bookingId': bookingId,
       'decision': 'approve',
+      'waiveFinancialCharge': waiveFinancialCharge,
+      if (waiveFinancialCharge) 'waiverReason': waiverReason.trim(),
     });
   }
 

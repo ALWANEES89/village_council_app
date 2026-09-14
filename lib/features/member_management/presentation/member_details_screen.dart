@@ -102,7 +102,10 @@ class _MemberDetailsScreenState extends ConsumerState<MemberDetailsScreen> {
     final roleId = await _selectionDialog(
       title: 'تغيير الصلاحية',
       items: {
-        for (final role in roles) role['roleId'] as String: _roleName(role),
+        for (final role in roles)
+          if (!const {'owner', 'council_owner', 'system_owner'}
+              .contains(role['roleId']))
+            role['roleId'] as String: _roleName(role),
       },
     );
     if (roleId == null) return;
@@ -303,7 +306,8 @@ class _MemberDetailsScreenState extends ConsumerState<MemberDetailsScreen> {
     // سجلّات تطوير مؤقتة (debug فقط) لتشخيص ظهور أزرار الإدارة.
     assert(() {
       final m = member.valueOrNull?.membership;
-      debugPrint('[Access] uid=${ref.read(authServiceProvider).currentUser?.uid} '
+      debugPrint(
+          '[Access] uid=${ref.read(authServiceProvider).currentUser?.uid} '
           'org=${widget.organizationId} target=${widget.userId}');
       debugPrint('[Access] role=${m?.role} roleId=${m?.roleId} '
           'status=${m?.status.name} isPrimaryOwner=${m?.isPrimaryOwner} '

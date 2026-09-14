@@ -1,4 +1,5 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { hasAnyMembershipPermission } = require("./permission_policy");
 const { onDocumentCreated, onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
@@ -15,7 +16,10 @@ const {
 const {
   formatOmaniRialForSystemNotification,
 } = require("./omr_currency");
-const { membershipForUser } = require("./production_security")._test;
+const {
+  membershipForUser,
+  shouldEnforceCallableAppCheck,
+} = require("./production_security")._test;
 
 const db = () => admin.firestore();
 const timestamp = () => Timestamp.now();
@@ -32,7 +36,16 @@ const receiptContentTypes = new Map([
 ]);
 const financialMemberPageSize = 50;
 const financialMemberPageTokenVersion = 1;
-const sensitiveCallableOptions = { region: "us-central1", enforceAppCheck: true };
+const sensitiveCallableOptions = {
+  region: "us-central1",
+  enforceAppCheck: shouldEnforceCallableAppCheck(),
+};
+const financialConfigurationCallableOptions = {
+  ...sensitiveCallableOptions,
+  timeoutSeconds: 540,
+  memory: "512MiB",
+};
+const defaultCouncilSubscriptionPlanId = "council-default";
 
 async function requireActiveMembership(organizationId, userId) {
   const membership = await membershipForUser(organizationId, userId);
@@ -43,15 +56,13 @@ async function requireActiveMembership(organizationId, userId) {
 }
 
 function canReview(data) {
-  const permissions = Array.isArray(data.permissionsSnapshot) ? data.permissionsSnapshot : [];
   return ["system_owner", "owner", "council_owner", "chairman", "financialManager", "financialReviewer"].includes(data.roleId) ||
-    permissions.some((permission) => ["fullAccess", "payments.manage", "receipts.review", "payments.approve", "payments.reject"].includes(permission));
+    hasAnyMembershipPermission(data, ["fullAccess", "payments.manage", "receipts.review", "payments.approve", "payments.reject"]);
 }
 
 function canManageFinancialConfig(data) {
-  const permissions = Array.isArray(data.permissionsSnapshot) ? data.permissionsSnapshot : [];
   return ["system_owner", "owner", "council_owner", "chairman", "financialManager"].includes(data.roleId) ||
-    permissions.some((permission) => ["fullAccess", "payments.manage"].includes(permission));
+    hasAnyMembershipPermission(data, ["fullAccess", "payments.manage"]);
 }
 
 async function requireReviewer(organizationId, userId) {
@@ -76,9 +87,8 @@ async function requireBookingManager(organizationId, userId) {
   if (platform.exists && platform.get("status") === "active" && platform.get("fullAccess") === true) return;
   const membership = await requireActiveMembership(organizationId, userId);
   const data = membership.data();
-  const permissions = Array.isArray(data.permissionsSnapshot) ? data.permissionsSnapshot : [];
   if (!["system_owner", "owner", "council_owner", "chairman", "adminManager"].includes(data.roleId) &&
-      !permissions.some((permission) => ["fullAccess", "bookings.manage", "bookings.approve"].includes(permission))) {
+      !hasAnyMembershipPermission(data, ["fullAccess", "bookings.manage", "bookings.approve"])) {
     throw new HttpsError("permission-denied", "Booking management permission is required.");
   }
 }
@@ -95,6 +105,14 @@ function requireString(value, name, max = 500) {
   return value.trim();
 }
 
+function requireDocumentId(value, name) {
+  const result = requireString(value, name, 128);
+  if (result.includes("/") || result === "." || result === "..") {
+    throw new HttpsError("invalid-argument", `${name} is invalid.`);
+  }
+  return result;
+}
+
 function requireBaisa(value, name) {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new HttpsError("invalid-argument", "Invalid monetary amount.");
@@ -107,6 +125,12 @@ function requireNonNegativeBaisa(value, name) {
     throw new HttpsError("invalid-argument", "Invalid monetary amount.");
   }
   return value;
+}
+
+function feeModeWithSubscription(currentFeeMode, subscriptionEnabled) {
+  const bookingEnabled = ["booking", "subscriptionAndBooking"].includes(currentFeeMode);
+  if (subscriptionEnabled) return bookingEnabled ? "subscriptionAndBooking" : "subscription";
+  return bookingEnabled ? "booking" : "free";
 }
 
 function serverReceiptReference(storagePath, bucket = admin.storage().bucket()) {
@@ -349,6 +373,126 @@ async function ensureSubscriptionCharge(accountSnapshot, { nowDate = new Date() 
   }
 }
 
+async function ensureSubscriptionChargesForAccounts(accountRefs) {
+  const results = [];
+  for (let index = 0; index < accountRefs.length; index += 20) {
+    const page = accountRefs.slice(index, index + 20);
+    const pageResults = await Promise.all(page.map(async (reference) => {
+      const snapshot = await reference.get();
+      return ensureSubscriptionCharge(snapshot);
+    }));
+    results.push(...pageResults);
+  }
+  return results;
+}
+
+async function syncCouncilDefaultSubscriptionAccounts({
+  organization,
+  planId,
+  planNameArabic,
+  previousPlanId,
+  actorUserId,
+}) {
+  let cursor = null;
+  let accountsSynced = 0;
+  let chargesCreated = 0;
+  do {
+    let query = organization.collection("memberships")
+      .where("status", "==", "active")
+      .orderBy(FieldPath.documentId())
+      .limit(200);
+    if (cursor) query = query.startAfter(cursor);
+    const memberships = await query.get();
+    const eligibleMemberships = memberships.docs.filter((membership) =>
+      typeof membership.get("userId") === "string" && membership.get("userId").trim().length > 0
+    );
+    const accountRefs = eligibleMemberships.map((membership) =>
+      organization.collection("member_accounts").doc(membership.id)
+    );
+    const existingAccounts = accountRefs.length > 0 ? await db().getAll(...accountRefs) : [];
+    const batch = db().batch();
+    const syncedAccountRefs = [];
+    const now = timestamp();
+    eligibleMemberships.forEach((membership, index) => {
+      const current = existingAccounts[index];
+      const currentPlanId = current.exists ? current.get("planId") : null;
+      const followsCouncilDefault = !currentPlanId || currentPlanId === planId ||
+        (previousPlanId && currentPlanId === previousPlanId);
+      if (!followsCouncilDefault) return;
+      const feeOverrideType = current.exists && ["default", "custom", "exempt"].includes(current.get("feeOverrideType"))
+        ? current.get("feeOverrideType") : "default";
+      batch.set(accountRefs[index], {
+        organizationId: organization.id,
+        membershipId: membership.id,
+        userId: membership.get("userId"),
+        planId,
+        planNameArabic,
+        subscriptionStatus: "active",
+        subscriptionStartDate: current.exists ? current.get("subscriptionStartDate") || now : now,
+        subscriptionEndDate: null,
+        feeOverrideType,
+        customAmountBaisa: current.exists ? current.get("customAmountBaisa") ?? null : null,
+        exemptionReason: current.exists ? current.get("exemptionReason") ?? null : null,
+        createdAt: current.exists ? current.get("createdAt") || now : now,
+        updatedAt: now,
+        updatedBy: actorUserId,
+      }, { merge: true });
+      syncedAccountRefs.push(accountRefs[index]);
+    });
+    if (syncedAccountRefs.length > 0) {
+      await batch.commit();
+      accountsSynced += syncedAccountRefs.length;
+      const chargeResults = await ensureSubscriptionChargesForAccounts(syncedAccountRefs);
+      chargesCreated += chargeResults.filter((result) => result === "created").length;
+    }
+    cursor = memberships.size === 200 ? memberships.docs.at(-1) : null;
+  } while (cursor);
+  return { accountsSynced, chargesCreated };
+}
+
+async function syncMembershipDefaultFinancialAccountHandler(event) {
+  const membership = event.data && event.data.after;
+  if (!membership || !membership.exists || membership.get("status") !== "active") return "inactive";
+  const { organizationId, membershipId } = event.params;
+  const userId = membership.get("userId");
+  if (typeof userId !== "string" || !userId.trim()) return "missing-user";
+  const organization = db().collection("organizations").doc(organizationId);
+  const settings = await organization.collection("financial_settings").doc("main").get();
+  if (!settings.exists || !["subscription", "subscriptionAndBooking"].includes(settings.get("feeMode"))) {
+    return "not-subscription";
+  }
+  const planId = settings.get("defaultSubscriptionPlanId");
+  if (typeof planId !== "string" || !planId) return "missing-default-plan";
+  const plan = await organization.collection("subscription_plans").doc(planId).get();
+  if (!plan.exists || plan.get("active") !== true) return "disabled-plan";
+  const accountRef = organization.collection("member_accounts").doc(membershipId);
+  const result = await db().runTransaction(async (transaction) => {
+    const current = await transaction.get(accountRef);
+    if (current.exists && current.get("planId")) return "custom-plan";
+    const now = timestamp();
+    transaction.set(accountRef, {
+      organizationId,
+      membershipId,
+      userId,
+      planId,
+      planNameArabic: plan.get("nameArabic") || "اشتراك المجلس",
+      subscriptionStatus: "active",
+      subscriptionStartDate: current.exists ? current.get("subscriptionStartDate") || now : now,
+      subscriptionEndDate: null,
+      feeOverrideType: current.exists && ["default", "custom", "exempt"].includes(current.get("feeOverrideType"))
+        ? current.get("feeOverrideType") : "default",
+      customAmountBaisa: current.exists ? current.get("customAmountBaisa") ?? null : null,
+      exemptionReason: current.exists ? current.get("exemptionReason") ?? null : null,
+      createdAt: current.exists ? current.get("createdAt") || now : now,
+      updatedAt: now,
+      updatedBy: "membership-financial-sync",
+    }, { merge: true });
+    return "synced";
+  });
+  if (result !== "synced") return result;
+  return ensureSubscriptionCharge(await accountRef.get());
+}
+
 exports.syncMemberDirectory = onDocumentWritten(
   { document: "organizations/{organizationId}/memberships/{membershipId}", region: "us-central1" },
   async (event) => {
@@ -408,6 +552,11 @@ exports.syncMemberDirectoryProfile = onDocumentWritten(
   }
 );
 
+exports.syncMembershipDefaultFinancialAccount = onDocumentWritten(
+  { document: "organizations/{organizationId}/memberships/{membershipId}", region: "us-central1" },
+  syncMembershipDefaultFinancialAccountHandler
+);
+
 exports.onMemberFinancialAccountWritten = onDocumentWritten(
   { document: "organizations/{organizationId}/member_accounts/{membershipId}", region: "us-central1" },
   async (event) => {
@@ -448,11 +597,35 @@ async function bookingFinancialLifecycleHandler(event) {
       });
       const chargeRef = organization.collection("charges").doc(chargeId);
       const existing = await transaction.get(chargeRef);
-      const amountBaisa = Number(settings.get(accountType === "member" ? "memberBookingFeeBaisa" : "nonMemberBookingFeeBaisa"));
+      const bookingCategory = after.bookingCategory === "event" ? "event" : "regular";
+      const amountBaisa = Number(settings.get(bookingFeeSettingKey(bookingCategory, accountType)));
       const now = timestamp();
       if (after.status === "approved") {
         if (existing.exists) return "exists";
-        if (!Number.isSafeInteger(amountBaisa) || amountBaisa <= 0) return "zero-fee";
+        if (after.financialFeeWaived === true) {
+          transaction.set(event.data.after.ref, {
+            financialFeeStatus: "waived",
+            financialChargeId: null,
+            financialAccountType: accountType,
+            financialMembershipId: membershipId,
+            updatedAt: now,
+          }, { merge: true });
+          setAudit(transaction, organization, event.id, after.financialFeeWaivedBy || after.approvedBy || after.userId,
+            "financial.booking_charge.waived", "booking", bookingId, {
+              newValue: { waiverReason: after.financialWaiverReason || "" },
+            });
+          return "waived";
+        }
+        if (!Number.isSafeInteger(amountBaisa) || amountBaisa <= 0) {
+          transaction.set(event.data.after.ref, {
+            financialFeeStatus: "notRequired",
+            financialChargeId: null,
+            financialAccountType: accountType,
+            financialMembershipId: membershipId,
+            updatedAt: now,
+          }, { merge: true });
+          return "zero-fee";
+        }
         const dueDate = after.bookingDate && typeof after.bookingDate.toDate === "function" ? after.bookingDate : now;
         const data = {
           chargeId, organizationId, accountType, membershipId, userId: after.userId,
@@ -467,6 +640,7 @@ async function bookingFinancialLifecycleHandler(event) {
         transaction.create(chargeRef, data);
         transaction.set(event.data.after.ref, {
           financialChargeId: chargeId,
+          financialFeeStatus: "charged",
           financialAccountType: accountType,
           financialMembershipId: membershipId,
           updatedAt: now,
@@ -492,8 +666,9 @@ async function bookingFinancialLifecycleHandler(event) {
       }
       return "ignored";
     });
-    if (["created", "cancelled", "refundRequired"].includes(result)) {
+    if (["created", "waived", "cancelled", "refundRequired"].includes(result)) {
       const message = result === "created" ? "تم إنشاء رسم الحجز في ملخص حسابك."
+        : result === "waived" ? "تم اعتماد الحجز مع إعفاء رسومه."
         : result === "refundRequired" ? "يتطلب رسم الحجز مراجعة استرداد مالي."
           : "تم إلغاء رسم الحجز غير المدفوع.";
       await db().collection("users").doc(after.userId).collection("notifications")
@@ -504,6 +679,11 @@ async function bookingFinancialLifecycleHandler(event) {
         );
     }
     console.log("Booking financial lifecycle", { organizationId, bookingId, result });
+}
+
+function bookingFeeSettingKey(bookingCategory, accountType) {
+  if (bookingCategory === "event") return "eventBookingFeeBaisa";
+  return accountType === "member" ? "memberBookingFeeBaisa" : "nonMemberBookingFeeBaisa";
 }
 exports.onBookingFinancialLifecycle = onDocumentWritten(
   { document: "organizations/{organizationId}/bookings/{bookingId}", region: "us-central1" },
@@ -654,6 +834,14 @@ async function getBookingAvailabilityHandler(request) {
   const allowed = (membership && membership.get("status") === "active") ||
     (publicSettings.exists && publicSettings.get("allowHallRental") === true);
   if (!allowed) throw new HttpsError("permission-denied", "Booking access is not enabled for this council.");
+  const membershipData = membership ? membership.data() : {};
+  const canSeePendingRequests = membership && (
+    ["system_owner", "owner", "council_owner", "chairman", "adminManager"]
+      .includes(membershipData.roleId) ||
+    hasAnyMembershipPermission(membershipData, [
+      "fullAccess", "bookings.manage", "bookings.approve",
+    ])
+  );
   // Oman is UTC+4 all year. Query exact Muscat month boundaries, not UTC month boundaries.
   const start = new Date(Date.UTC(year, month - 1, 1, -4));
   const end = new Date(Date.UTC(year, month, 1, -4));
@@ -668,8 +856,11 @@ async function getBookingAvailabilityHandler(request) {
       .limit(200);
     if (cursor) query = query.startAfter(cursor);
     const page = await query.get();
-    bookings.push(...page.docs.filter((document) =>
-      ["pending", "approved", "cancellationRequested"].includes(document.get("status"))));
+    bookings.push(...page.docs.filter((document) => {
+      const status = document.get("status");
+      return ["approved", "cancellationRequested"].includes(status) ||
+        (canSeePendingRequests && status === "pending");
+    }));
     cursor = page.size === 200 ? page.docs.at(-1) : null;
   } while (cursor);
   return {
@@ -685,6 +876,83 @@ async function getBookingAvailabilityHandler(request) {
   };
 }
 exports.getBookingAvailability = onCall(sensitiveCallableOptions, getBookingAvailabilityHandler);
+
+function canViewCouncilDashboardMetrics(data = {}) {
+  return [
+    "system_owner", "owner", "council_owner", "chairman", "adminManager",
+    "financialManager", "financialReviewer",
+  ].includes(data.roleId) || hasAnyMembershipPermission(data, [
+    "adminDashboard", "members.manage", "members.read", "bookings.manage",
+    "bookings.approve", "payments.manage", "receipts.review",
+    "payments.approve", "payments.reject", "reports.view", "audit.read",
+  ]);
+}
+
+function muscatStartOfDayTimestamp(nowDate = new Date()) {
+  // Oman is UTC+4 all year. Bookings are stored at the start of their
+  // Muscat calendar day, so the dashboard must include all of today.
+  const muscatNow = new Date(nowDate.getTime() + 4 * 60 * 60 * 1000);
+  return Timestamp.fromDate(new Date(Date.UTC(
+    muscatNow.getUTCFullYear(),
+    muscatNow.getUTCMonth(),
+    muscatNow.getUTCDate(),
+    -4,
+  )));
+}
+
+async function getCouncilDashboardMetricsHandler(request, options = {}) {
+  const database = options.database || db();
+  const userId = requireAuth(request);
+  const data = request.data && typeof request.data === "object" && !Array.isArray(request.data)
+    ? request.data : {};
+  const organizationId = requireDocumentId(data.organizationId, "organizationId");
+  const organization = database.collection("organizations").doc(organizationId);
+  const [organizationSnapshot, platform, membership] = await Promise.all([
+    organization.get(),
+    database.collection("platform_admins").doc(userId).get(),
+    membershipForUser(organizationId, userId, database),
+  ]);
+  if (!organizationSnapshot.exists) {
+    throw new HttpsError("not-found", "Council not found.");
+  }
+  const isSystemOwner = platform.exists && platform.get("status") === "active" &&
+    (platform.get("role") === "system_owner" ||
+      (platform.get("role") === "superAdmin" && platform.get("fullAccess") === true));
+  const membershipData = membership && membership.get("status") === "active"
+    ? membership.data()
+    : null;
+  if (!isSystemOwner &&
+      (!membershipData || !canViewCouncilDashboardMetrics(membershipData))) {
+    throw new HttpsError("permission-denied", "Council dashboard access is required.");
+  }
+
+  const membersResult = await organization.collection("memberships")
+    .where("status", "==", "active").count().get();
+  const upcomingStart = muscatStartOfDayTimestamp(options.nowDate || new Date());
+  let upcomingBookings = 0;
+  let cursor = null;
+  do {
+    let query = organization.collection("bookings")
+      .where("bookingDate", ">=", upcomingStart)
+      .orderBy("bookingDate")
+      .select("status")
+      .limit(250);
+    if (cursor) query = query.startAfter(cursor);
+    const page = await query.get();
+    upcomingBookings += page.docs.filter((document) =>
+      ["approved", "confirmed"].includes(document.get("status"))).length;
+    cursor = page.size === 250 ? page.docs.at(-1) : null;
+  } while (cursor);
+
+  return {
+    memberCount: membersResult.data().count,
+    upcomingBookingCount: upcomingBookings,
+  };
+}
+exports.getCouncilDashboardMetrics = onCall(
+  sensitiveCallableOptions,
+  getCouncilDashboardMetricsHandler,
+);
 
 const scheduleEnvironmentKeys = {
   generateSubscriptionCharges: "FINANCIAL_SCHEDULE_GENERATE_SUBSCRIPTIONS_ENABLED",
@@ -793,10 +1061,140 @@ exports.markFinancialChargesOverdue = onSchedule(
   markFinancialChargesOverdueHandler
 );
 
-exports.updateFinancialSettings = onCall(sensitiveCallableOptions, async (request) => {
+async function configureCouncilSubscriptionHandler(request) {
   const actorUserId = requireAuth(request);
-  const organizationId = requireString(request.data.organizationId, "organizationId", 128);
-  const requestId = requireString(request.data.requestId, "requestId", 128);
+  const organizationId = requireDocumentId(request.data.organizationId, "organizationId");
+  const requestId = requireDocumentId(request.data.requestId, "requestId");
+  if (typeof request.data.subscriptionEnabled !== "boolean") {
+    throw new HttpsError("invalid-argument", "subscriptionEnabled is invalid.");
+  }
+  const subscriptionEnabled = request.data.subscriptionEnabled;
+  const billingCycle = subscriptionEnabled
+    ? requireString(request.data.billingCycle, "billingCycle", 20) : null;
+  if (billingCycle && !["monthly", "annual", "oneTime"].includes(billingCycle)) {
+    throw new HttpsError("invalid-argument", "Invalid billing cycle.");
+  }
+  const amountBaisa = subscriptionEnabled
+    ? requireBaisa(request.data.amountBaisa, "amountBaisa") : null;
+  const requestedPlanId = request.data.planId == null
+    ? null : requireDocumentId(request.data.planId, "planId");
+  await requireFinanceManager(organizationId, actorUserId);
+
+  const organization = db().collection("organizations").doc(organizationId);
+  const settingsRef = organization.collection("financial_settings").doc("main");
+  const configuration = await db().runTransaction(async (transaction) => {
+    const [organizationSnapshot, current] = await Promise.all([
+      transaction.get(organization),
+      transaction.get(settingsRef),
+    ]);
+    if (!organizationSnapshot.exists) {
+      throw new HttpsError("not-found", "Council not found.");
+    }
+    const currentFeeMode = current.exists ? current.get("feeMode") : "free";
+    const storedDefaultPlanId = current.exists ? current.get("defaultSubscriptionPlanId") : null;
+    const validStoredPlanId = typeof storedDefaultPlanId === "string" && storedDefaultPlanId &&
+      !storedDefaultPlanId.includes("/") ? storedDefaultPlanId : null;
+    const planId = requestedPlanId || validStoredPlanId || defaultCouncilSubscriptionPlanId;
+    const planRef = organization.collection("subscription_plans").doc(planId);
+    const plan = subscriptionEnabled ? await transaction.get(planRef) : null;
+    const now = timestamp();
+    const settingsData = {
+      organizationId,
+      currency: "OMR",
+      feeMode: feeModeWithSubscription(currentFeeMode, subscriptionEnabled),
+      defaultSubscriptionPlanId: planId,
+      onlinePaymentsEnabled: false,
+      onlinePaymentProvider: null,
+      updatedAt: now,
+      updatedBy: actorUserId,
+      ...(current.exists ? {} : {
+        receiptPaymentsEnabled: true,
+        allowMonthlyPlans: true,
+        allowAnnualPlans: true,
+        memberBookingFeeBaisa: 0,
+        nonMemberBookingFeeBaisa: 0,
+        eventBookingFeeBaisa: 0,
+        createdAt: now,
+      }),
+    };
+    transaction.set(settingsRef, settingsData, { merge: true });
+    let planNameArabic = null;
+    if (subscriptionEnabled) {
+      planNameArabic = plan.exists && typeof plan.get("nameArabic") === "string" && plan.get("nameArabic").trim()
+        ? plan.get("nameArabic").trim() : "اشتراك المجلس";
+      transaction.set(planRef, {
+        planId,
+        organizationId,
+        nameArabic: planNameArabic,
+        descriptionArabic: plan.exists ? plan.get("descriptionArabic") || "" : "الباقة الافتراضية لأعضاء المجلس",
+        billingCycle,
+        amountBaisa,
+        active: true,
+        startDate: plan.exists ? plan.get("startDate") || now : now,
+        endDate: null,
+        createdAt: plan.exists ? plan.get("createdAt") || now : now,
+        updatedAt: now,
+        createdBy: plan.exists ? plan.get("createdBy") || actorUserId : actorUserId,
+        updatedBy: actorUserId,
+      }, { merge: true });
+    }
+    setAudit(
+      transaction,
+      organization,
+      requestId,
+      actorUserId,
+      "financial.council_subscription.configured",
+      "financial_settings",
+      "main",
+      {
+        oldValue: current.exists ? current.data() : null,
+        newValue: {
+          ...settingsData,
+          subscriptionPlan: subscriptionEnabled ? { planId, billingCycle, amountBaisa } : null,
+        },
+      }
+    );
+    return {
+      planId,
+      planNameArabic,
+      previousPlanId: validStoredPlanId,
+      feeMode: settingsData.feeMode,
+    };
+  });
+
+  if (!subscriptionEnabled) {
+    return {
+      status: "updated",
+      feeMode: configuration.feeMode,
+      planId: configuration.planId,
+      accountsSynced: 0,
+      chargesCreated: 0,
+    };
+  }
+  const syncResult = await syncCouncilDefaultSubscriptionAccounts({
+    organization,
+    planId: configuration.planId,
+    planNameArabic: configuration.planNameArabic,
+    previousPlanId: configuration.previousPlanId,
+    actorUserId,
+  });
+  return {
+    status: "updated",
+    feeMode: configuration.feeMode,
+    planId: configuration.planId,
+    ...syncResult,
+  };
+}
+
+exports.configureCouncilSubscription = onCall(
+  financialConfigurationCallableOptions,
+  configureCouncilSubscriptionHandler
+);
+
+async function updateFinancialSettingsHandler(request) {
+  const actorUserId = requireAuth(request);
+  const organizationId = requireDocumentId(request.data.organizationId, "organizationId");
+  const requestId = requireDocumentId(request.data.requestId, "requestId");
   await requireFinanceManager(organizationId, actorUserId);
   const feeMode = requireString(request.data.feeMode, "feeMode", 40);
   if (!["free", "subscription", "booking", "subscriptionAndBooking"].includes(feeMode)) {
@@ -805,7 +1203,13 @@ exports.updateFinancialSettings = onCall(sensitiveCallableOptions, async (reques
   const organization = db().collection("organizations").doc(organizationId);
   const reference = organization.collection("financial_settings").doc("main");
   await db().runTransaction(async (transaction) => {
-    const current = await transaction.get(reference);
+    const [organizationSnapshot, current] = await Promise.all([
+      transaction.get(organization),
+      transaction.get(reference),
+    ]);
+    if (!organizationSnapshot.exists) {
+      throw new HttpsError("not-found", "Council not found.");
+    }
     const now = timestamp();
     const data = {
       organizationId,
@@ -830,7 +1234,12 @@ exports.updateFinancialSettings = onCall(sensitiveCallableOptions, async (reques
     });
   });
   return { status: "updated" };
-});
+}
+
+exports.updateFinancialSettings = onCall(
+  sensitiveCallableOptions,
+  updateFinancialSettingsHandler
+);
 
 exports.saveFinancialPlan = onCall(sensitiveCallableOptions, async (request) => {
   const actorUserId = requireAuth(request);
@@ -1447,14 +1856,17 @@ async function reviewFinancialReceiptHandler(request) {
     if (data.organizationId !== organizationId || data.reviewStatus !== "pending" || data.status !== "pendingReview") {
       throw new HttpsError("failed-precondition", "Receipt is no longer pending.");
     }
-    if (!Number.isSafeInteger(data.amountDeclaredBaisa) || data.amountDeclaredBaisa !== data.allocationTotalBaisa || data.differenceBaisa !== 0) {
-      throw new HttpsError("failed-precondition", "Receipt amounts do not match.");
-    }
     const allocations = Array.isArray(data.allocations) ? data.allocations : [];
-    if (!allocations.length) throw new HttpsError("failed-precondition", "Receipt has no allocations.");
-    const chargeRefs = allocations.map((item) => organization.collection("charges").doc(item.chargeId));
-    const charges = await Promise.all(chargeRefs.map((reference) => transaction.get(reference)));
+    let chargeRefs = [];
+    let charges = [];
     if (decision === "approve") {
+      if (!Number.isSafeInteger(data.amountDeclaredBaisa) || data.amountDeclaredBaisa <= 0 ||
+          data.amountDeclaredBaisa !== data.allocationTotalBaisa || data.differenceBaisa !== 0) {
+        throw new HttpsError("failed-precondition", "Receipt amounts do not match.");
+      }
+      if (!allocations.length) throw new HttpsError("failed-precondition", "Receipt has no allocations.");
+      chargeRefs = allocations.map((item) => organization.collection("charges").doc(item.chargeId));
+      charges = await Promise.all(chargeRefs.map((reference) => transaction.get(reference)));
       charges.forEach((charge, index) => {
         const allocation = allocations[index];
         if (!charge.exists) throw new HttpsError("failed-precondition", "An allocation charge is missing.");
@@ -1472,10 +1884,10 @@ async function reviewFinancialReceiptHandler(request) {
       });
     }
     const now = timestamp();
-    charges.forEach((charge, index) => {
-      const allocation = allocations[index];
-      const chargeData = charge.data();
-      if (decision === "approve") {
+    if (decision === "approve") {
+      charges.forEach((charge, index) => {
+        const allocation = allocations[index];
+        const chargeData = charge.data();
         const amountPaidBaisa = chargeData.amountPaidBaisa + allocation.amountAllocatedBaisa;
         const balanceBaisa = chargeData.balanceBaisa - allocation.amountAllocatedBaisa;
         transaction.update(chargeRefs[index], {
@@ -1487,11 +1899,15 @@ async function reviewFinancialReceiptHandler(request) {
           lastPayerUserId: data.payerUserId,
           updatedAt: now,
         });
-      }
-    });
-    allocations.forEach((allocation) => {
-      transaction.delete(organization.collection("pending_receipt_locks").doc(`${data.payerUserId}_${allocation.chargeId}`));
-    });
+      });
+    }
+    if (typeof data.payerUserId === "string" && data.payerUserId.trim()) {
+      allocations.forEach((allocation) => {
+        if (typeof allocation?.chargeId !== "string" || !allocation.chargeId.trim()) return;
+        transaction.delete(organization.collection("pending_receipt_locks")
+          .doc(`${data.payerUserId}_${allocation.chargeId}`));
+      });
+    }
     transaction.update(transactionRef, {
       reviewStatus: decision === "approve" ? "approved" : "rejected",
       status: decision === "approve" ? "approved" : "rejected",
@@ -1511,16 +1927,20 @@ async function reviewFinancialReceiptHandler(request) {
     const payerBody = decision === "approve"
       ? "تم توزيع المبلغ على الرسوم المحددة بنجاح."
       : `سبب الرفض: ${rejectionReason}`;
-    enqueueFinancialNotification(transaction, organization,
-      notification(data.payerUserId, organizationId, `receipt_${decision}_${transactionId}`,
-        payerTitle, payerBody, decision === "approve" ? "receiptApproved" : "receiptRejected",
-        transactionId, reviewerId, "receipt", {
-          amountBaisa: data.amountDeclaredBaisa,
-          currencyCode: "OMR",
-          bodyTemplate: decision === "approve"
-            ? "تم اعتماد وتوزيع مبلغ {amount} على الرسوم المحددة بنجاح."
-            : `رُفض إيصال بقيمة {amount}. سبب الرفض: ${rejectionReason}`,
-        }));
+    if (typeof data.payerUserId === "string" && data.payerUserId.trim()) {
+      const validAmountBaisa = Number.isSafeInteger(data.amountDeclaredBaisa) && data.amountDeclaredBaisa >= 0 ?
+        data.amountDeclaredBaisa : 0;
+      enqueueFinancialNotification(transaction, organization,
+        notification(data.payerUserId, organizationId, `receipt_${decision}_${transactionId}`,
+          payerTitle, payerBody, decision === "approve" ? "receiptApproved" : "receiptRejected",
+          transactionId, reviewerId, "receipt", {
+            amountBaisa: validAmountBaisa,
+            currencyCode: "OMR",
+            bodyTemplate: decision === "approve"
+              ? "تم اعتماد وتوزيع مبلغ {amount} على الرسوم المحددة بنجاح."
+              : `رُفض إيصال بقيمة {amount}. سبب الرفض: ${rejectionReason}`,
+          }));
+    }
     if (decision === "approve") {
       const beneficiaries = new Map();
       allocations.forEach((item) => {
@@ -1906,13 +2326,18 @@ exports.expirePendingFinancialReceipts = onSchedule(
 );
 
 exports._test = {
+  bookingFeeSettingKey,
   bookingFinancialLifecycleHandler,
   cleanupOrphanReceiptsHandler,
+  configureCouncilSubscriptionHandler,
   deliverFinancialNotificationOutboxHandler,
   ensureSubscriptionCharge,
   expirePendingFinancialReceiptsHandler,
   generateSubscriptionChargesHandler,
   getBookingAvailabilityHandler,
+  canViewCouncilDashboardMetrics,
+  getCouncilDashboardMetricsHandler,
+  muscatStartOfDayTimestamp,
   getFinancialReceiptDownloadUrlHandler,
   getGuestBookingChargeHandler,
   getPayableChargesHandler,
@@ -1934,4 +2359,7 @@ exports._test = {
   serverReceiptReference,
   submitGuestBookingReceiptHandler,
   submitFinancialReceiptHandler,
+  syncCouncilDefaultSubscriptionAccounts,
+  syncMembershipDefaultFinancialAccountHandler,
+  updateFinancialSettingsHandler,
 };

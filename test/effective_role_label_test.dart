@@ -3,8 +3,7 @@ import 'package:village_council_app/core/auth/role_labels.dart';
 
 void main() {
   group('effectiveRoleLabelArabic', () {
-    test('العضو رقم 4 الحقيقي: roleId=member لكن permissionsSnapshot فيه fullAccess '
-        '→ لا يظهر "عضو"', () {
+    test('fullAccess الملوث لا يصعّد roleId=member في العرض', () {
       final label = effectiveRoleLabelArabic(
         'member',
         role: '',
@@ -16,8 +15,7 @@ void main() {
           'rentals.create',
         ],
       );
-      expect(label, 'مدير (صلاحيات كاملة)');
-      expect(label, isNot('عضو'));
+      expect(label, 'عضو');
     });
 
     test('عضو عادي فعلًا (لا صلاحيات إدارية) → يظهر "عضو"', () {
@@ -29,7 +27,8 @@ void main() {
       expect(label, 'عضو');
     });
 
-    test('عضو roleId=member لكنه يملك membershipRequests.review '
+    test(
+        'عضو roleId=member لكنه يملك membershipRequests.review '
         '→ يظهر مدير بصلاحيات مخصّصة', () {
       final label = effectiveRoleLabelArabic(
         'member',
@@ -38,8 +37,10 @@ void main() {
       expect(label, 'مدير (صلاحيات مخصّصة)');
     });
 
-    test('دور مميّز صريح adminManager يُعرض كما هو بغضّ النظر عن الصلاحيات', () {
-      final label = effectiveRoleLabelArabic('adminManager', permissions: const []);
+    test('دور مميّز صريح adminManager يُعرض كما هو بغضّ النظر عن الصلاحيات',
+        () {
+      final label =
+          effectiveRoleLabelArabic('adminManager', permissions: const []);
       expect(label, 'مدير إداري');
     });
 

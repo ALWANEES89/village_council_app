@@ -1,10 +1,10 @@
 import 'dart:ui' as ui;
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../providers/app_providers.dart';
@@ -50,11 +50,11 @@ class _OrganizationsManagementScreenState
 
   @override
   Widget build(BuildContext context) {
-    final accessAsync = ref.watch(adminAccessProvider);
+    final accessAsync = ref.watch(systemOwnerAccessProvider);
     if (accessAsync.isLoading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    if (accessAsync.asData?.value.isSuperAdmin != true) {
+    if (accessAsync.asData?.value != true) {
       return Scaffold(
         appBar: AppBar(),
         body: const Center(
@@ -138,6 +138,68 @@ class _OrganizationAdminCard extends ConsumerWidget {
   final Map<String, dynamic> organization;
   final bool notificationsEnabled;
 
+  Future<void> _openMaps(BuildContext context) async {
+    final value = organization['googleMapsUrl'] as String? ?? '';
+    final uri = Uri.tryParse(value);
+    if (uri == null || !uri.hasScheme) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('رابط خرائط المجلس غير صالح')),
+      );
+      return;
+    }
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication) &&
+        context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تعذر فتح رابط الخرائط')),
+      );
+    }
+  }
+
+  Future<void> _toggleArchive(BuildContext context, WidgetRef ref) async {
+    final organizationId = organization['organizationId'] as String;
+    final active = organization['status'] == 'active';
+    final action = active ? 'أرشفة' : 'إعادة تفعيل';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('$action المجلس؟'),
+        content: Text(
+          active
+              ? 'سيختفي المجلس من القوائم العامة مع الاحتفاظ بجميع بياناته.'
+              : 'سيظهر المجلس مرة أخرى في القوائم العامة.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(action),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    try {
+      await ref.read(organizationRepositoryProvider).setArchived(
+            organizationId,
+            archived: active,
+            actorUserId: ref.read(authServiceProvider).currentUser?.uid,
+          );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تم $action المجلس بنجاح')),
+      );
+    } on FirebaseException {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('تعذر $action المجلس. حاول مرة أخرى.')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final organizationId = organization['organizationId'] as String;
@@ -176,6 +238,14 @@ class _OrganizationAdminCard extends ConsumerWidget {
             ),
             const SizedBox(height: 10),
             Text('تاريخ الإنشاء: $createdLabel'),
+            if ((organization['googleMapsUrl'] as String? ?? '')
+                .trim()
+                .isNotEmpty)
+              TextButton.icon(
+                onPressed: () => _openMaps(context),
+                icon: const Icon(Icons.location_on_outlined),
+                label: const Text('فتح موقع المجلس في خرائط Google'),
+              ),
             FutureBuilder<Map<String, int>>(
               future: ref
                   .read(organizationRepositoryProvider)
@@ -216,14 +286,7 @@ class _OrganizationAdminCard extends ConsumerWidget {
                   label: const Text('تعديل'),
                 ),
                 OutlinedButton.icon(
-                  onPressed: () => ref
-                      .read(organizationRepositoryProvider)
-                      .setArchived(
-                        organizationId,
-                        archived: active,
-                        actorUserId:
-                            ref.read(authServiceProvider).currentUser?.uid,
-                      ),
+                  onPressed: () => _toggleArchive(context, ref),
                   icon: Icon(active ? Icons.archive_outlined : Icons.unarchive),
                   label: Text(active ? 'أرشفة' : 'إعادة التفعيل'),
                 ),

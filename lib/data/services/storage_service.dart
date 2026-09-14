@@ -75,6 +75,51 @@ class StorageService {
     await ref.delete();
   }
 
+  Future<StorageUploadResult> uploadExpenseAttachment({
+    required File file,
+    required String organizationId,
+    required String expenseId,
+    required String userId,
+  }) async {
+    final originalName = file.path.split(Platform.pathSeparator).last;
+    final fileName = originalName.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    final extension = fileName.split('.').last.toLowerCase();
+    final fileType = switch (extension) {
+      'jpg' || 'jpeg' => 'image/jpeg',
+      'png' => 'image/png',
+      'webp' => 'image/webp',
+      'pdf' => 'application/pdf',
+      _ => throw const FormatException('Unsupported expense attachment type.'),
+    };
+    final fileSize = await file.length();
+    if (fileSize <= 0 || fileSize > 10 * 1024 * 1024) {
+      throw const FormatException('Invalid expense attachment size.');
+    }
+    final reference = _storage.ref(
+      'organizations/$organizationId/expenses/$expenseId/$fileName',
+    );
+    await reference.putFile(
+      file,
+      SettableMetadata(
+        contentType: fileType,
+        customMetadata: {
+          'organizationId': organizationId,
+          'expenseId': expenseId,
+          'uploaderUid': userId,
+        },
+      ),
+    );
+    return StorageUploadResult(
+      fullPath: reference.fullPath,
+      fileName: fileName,
+      fileType: fileType,
+      fileSize: fileSize,
+    );
+  }
+
+  Future<void> deleteExpenseAttachment(String storagePath) =>
+      _storage.ref(storagePath).delete();
+
   Future<String> uploadProfilePhoto({
     required File file,
     required String userId,

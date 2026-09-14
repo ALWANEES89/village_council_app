@@ -2,10 +2,19 @@ const crypto = require("node:crypto");
 const admin = require("firebase-admin");
 const { FieldValue, Timestamp } = require("firebase-admin/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { hasAnyMembershipPermission } = require("./permission_policy");
 const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 
 const REGION = "us-central1";
-const sensitiveCallableOptions = { region: REGION, enforceAppCheck: true };
+function shouldEnforceCallableAppCheck(environment = process.env) {
+  return environment.FUNCTIONS_EMULATOR !== "true";
+}
+const sensitiveCallableOptions = {
+  region: REGION,
+  // The Functions Emulator cannot validate the mobile debug App Check token.
+  // Production keeps enforcement enabled; only the explicit emulator runtime bypasses it.
+  enforceAppCheck: shouldEnforceCallableAppCheck(),
+};
 const db = () => admin.firestore();
 
 function requireAuth(request) {
@@ -54,11 +63,18 @@ function isPrimaryCouncilOwner(data = {}) {
 }
 
 function canManageBookings(data = {}) {
-  const permissions = Array.isArray(data.permissionsSnapshot) ? data.permissionsSnapshot : [];
   return ["owner", "council_owner", "chairman", "adminManager"].includes(data.roleId) ||
     ["owner", "council_owner", "chairman", "adminManager"].includes(data.role) ||
-    permissions.some((permission) =>
-      ["fullAccess", "bookings.manage", "bookings.approve"].includes(permission));
+    hasAnyMembershipPermission(data, ["fullAccess", "bookings.manage", "bookings.approve"]);
+}
+
+// إعفاء رسم حجز قرار مالي، وليس مجرد قرار تشغيلي لاعتماد الحجز. لذلك لا
+// يكفي امتلاك صلاحية bookings.manage وحدها؛ يجب أن يكون للمستخدم دور مالي
+// أو ملكية المجلس. يبقى system_owner مغطى من requireBookingFeeWaiverManager.
+function canWaiveBookingFee(data = {}) {
+  return ["owner", "council_owner", "system_owner", "chairman", "financialManager"].includes(data.roleId) ||
+    ["owner", "council_owner", "system_owner", "chairman", "financialManager"].includes(data.role) ||
+    hasAnyMembershipPermission(data, ["fullAccess", "payments.manage"]);
 }
 
 async function requireBookingManager(organizationId, userId, database = db()) {
@@ -67,6 +83,15 @@ async function requireBookingManager(organizationId, userId, database = db()) {
   if (!membership || membership.get("status") !== "active" ||
       !canManageBookings(membership.data())) {
     throw new HttpsError("permission-denied", "Booking management permission is required.");
+  }
+}
+
+async function requireBookingFeeWaiverManager(organizationId, userId, database = db()) {
+  if (await isPlatformSystemOwner(userId, database)) return;
+  const membership = await membershipForUser(organizationId, userId, database);
+  if (!membership || membership.get("status") !== "active" ||
+      !canWaiveBookingFee(membership.data())) {
+    throw new HttpsError("permission-denied", "Financial permission is required to waive a booking fee.");
   }
 }
 
@@ -208,6 +233,13 @@ async function createBookingHandler(request, options = {}) {
   const membershipId = optionalString(request.data.membershipId, 128);
   const requesterName = requireString(request.data.requesterName, "requesterName", 160);
   const requesterPhone = requireString(request.data.requesterPhone, "requesterPhone", 40);
+  const rawBookingCategory = request.data.bookingCategory;
+  const bookingCategory = rawBookingCategory == null
+    ? "regular"
+    : requireString(rawBookingCategory, "bookingCategory", 20);
+  if (!["regular", "event"].includes(bookingCategory)) {
+    throw new HttpsError("invalid-argument", "bookingCategory is invalid.");
+  }
   const occasionType = requireString(request.data.occasionType, "occasionType", 120);
   const notes = optionalString(request.data.notes, 1000);
   const startTime = normalizeTime(request.data.startTime);
@@ -228,24 +260,13 @@ async function createBookingHandler(request, options = {}) {
   }
 
   const bookingRef = organization.collection("bookings").doc(bookingId);
-  const slotRef = organization.collection("booking_slots").doc(slotKey);
-  await assertNoLegacyBookingConflict({
-    organization, bookingId, bookingDay: dayKey, bookingDate,
-    resourceId, startTime, endTime,
-  });
   const result = await database.runTransaction(async (transaction) => {
-    const [existingBooking, existingSlot] = await Promise.all([
-      transaction.get(bookingRef), transaction.get(slotRef),
-    ]);
+    const existingBooking = await transaction.get(bookingRef);
     if (existingBooking.exists) {
       if (existingBooking.get("userId") === userId && existingBooking.get("slotKey") === slotKey) {
         return { idempotent: true };
       }
       throw new HttpsError("already-exists", "Booking request already exists.");
-    }
-    if (existingSlot.exists && existingSlot.get("bookingId") !== bookingId &&
-        ["pending", "approved", "cancellationRequested"].includes(existingSlot.get("status"))) {
-      throw new HttpsError("already-exists", "The requested booking slot is unavailable.");
     }
     const now = Timestamp.now();
     transaction.set(bookingRef, {
@@ -254,13 +275,8 @@ async function createBookingHandler(request, options = {}) {
       requesterName, requesterPhone, bookingDate, bookingDay: dayKey,
       resourceId, slotKey,
       ...(startTime ? { startTime, endTime } : {}),
-      occasionType, notes, status: "pending", createdAt: now, updatedAt: now,
+      bookingCategory, occasionType, notes, status: "pending", createdAt: now, updatedAt: now,
       createdVia: "createBookingCallable",
-    });
-    transaction.set(slotRef, {
-      organizationId, bookingId, userId, resourceId, slotKey,
-      bookingDate, bookingDay: dayKey, startTime: startTime || null,
-      endTime: endTime || null, status: "pending", createdAt: now, updatedAt: now,
     });
     return { idempotent: false };
   });
@@ -272,11 +288,28 @@ async function createBookingHandler(request, options = {}) {
       type: "bookingReceived", relatedEntityType: "booking",
       relatedEntityId: bookingId, actorUserId: userId,
     }), database);
+    // New bookings carry bookingDay, while legacy bookings only carry the
+    // Muscat-midnight bookingDate. Check both without dropping compatibility.
+    const [conflictsByDay, conflictsByDate] = await Promise.all([
+      organization.collection("bookings").where("bookingDay", "==", dayKey).get(),
+      organization.collection("bookings").where("bookingDate", "==", bookingDate).get(),
+    ]);
+    const conflictDocuments = new Map();
+    for (const document of [...conflictsByDay.docs, ...conflictsByDate.docs]) {
+      conflictDocuments.set(document.id, document);
+    }
+    const hasConfirmedConflict = [...conflictDocuments.values()].some((document) =>
+      document.id !== bookingId &&
+      ["approved", "cancellationRequested"].includes(document.get("status")) &&
+      (document.get("resourceId") || "council_hall") === resourceId);
     const reviewers = await bookingReviewerUserIds(organization, userId);
     await Promise.all(reviewers.map((reviewerUserId) => writeServerNotification(serverNotification({
       userId: reviewerUserId, organizationId,
       notificationId: `bookingSubmitted_${bookingId}`,
-      title: "طلب حجز جديد", body: "يوجد طلب جديد لحجز المجلس.",
+      title: "طلب حجز جديد",
+      body: hasConfirmedConflict
+        ? "تم تقديم طلب حجز جديد على تاريخ محجوز مسبقًا."
+        : "يوجد طلب جديد لحجز المجلس.",
       type: "bookingSubmitted", relatedEntityType: "booking",
       relatedEntityId: bookingId, actorUserId: userId,
     }), database)));
@@ -294,7 +327,18 @@ async function reviewBookingHandler(request, options = {}) {
     throw new HttpsError("invalid-argument", "Invalid booking decision.");
   }
   const reason = optionalString(request.data.reason, 500);
+  const waiveFinancialCharge = request.data.waiveFinancialCharge === true;
+  const waiverReason = optionalString(request.data.waiverReason, 500);
+  if (waiveFinancialCharge && decision !== "approve") {
+    throw new HttpsError("invalid-argument", "A booking fee can only be waived when approving a booking.");
+  }
+  if (waiveFinancialCharge && !waiverReason) {
+    throw new HttpsError("invalid-argument", "A waiver reason is required.");
+  }
   await requireBookingManager(organizationId, reviewerId, database);
+  if (waiveFinancialCharge) {
+    await requireBookingFeeWaiverManager(organizationId, reviewerId, database);
+  }
   const organization = database.collection("organizations").doc(organizationId);
   const bookingRef = organization.collection("bookings").doc(bookingId);
   if (decision === "approve") {
@@ -354,7 +398,13 @@ async function reviewBookingHandler(request, options = {}) {
       transaction.update(bookingRef, {
         status: "approved", approvedBy: reviewerId, approvedAt: now,
         rejectionReason: null, resourceId: slotIdentity.resourceId, slotKey,
-        bookingDay, updatedAt: now,
+        bookingDay,
+        financialFeeWaived: waiveFinancialCharge,
+        financialWaiverReason: waiveFinancialCharge ? waiverReason : null,
+        financialFeeWaivedBy: waiveFinancialCharge ? reviewerId : null,
+        financialFeeWaivedAt: waiveFinancialCharge ? now : null,
+        financialFeeStatus: waiveFinancialCharge ? "waived" : "pendingAssessment",
+        updatedAt: now,
       });
     } else {
       if (slot.exists && slot.get("bookingId") === bookingId) transaction.delete(slotRef);
@@ -373,7 +423,7 @@ async function reviewBookingHandler(request, options = {}) {
     type: decision === "approve" ? "bookingApproved" : "bookingRejected",
     relatedEntityType: "booking", relatedEntityId: bookingId, actorUserId: reviewerId,
   }), database);
-  return { bookingId, status: result.status };
+  return { bookingId, status: result.status, feeWaived: waiveFinancialCharge };
 }
 
 function accessProjection(membership, membershipId, organizationId) {
@@ -678,11 +728,13 @@ exports._test = {
   bootstrapOrganizationHandler,
   repairOrganizationStructureHandler,
   createBookingHandler,
+  canWaiveBookingFee,
   isPrimaryCouncilOwner,
   membershipForUser,
   membershipRequestNotificationHandler,
   reviewBookingHandler,
   serverNotification,
+  shouldEnforceCallableAppCheck,
   syncMembershipAccessHandler,
   transferPrimaryCouncilOwnershipHandler,
   writeServerNotification,

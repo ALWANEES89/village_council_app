@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/errors/firebase_function_error_message.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/booking_model.dart';
 import '../../../providers/app_providers.dart';
@@ -21,7 +22,11 @@ class _BookingRequestsReviewScreenState
     extends ConsumerState<BookingRequestsReviewScreen> {
   String? _processingId;
 
-  Future<void> _approve(BookingModel booking) async {
+  Future<void> _approve(
+    BookingModel booking, {
+    bool waiveFinancialCharge = false,
+    String waiverReason = '',
+  }) async {
     final user = ref.read(authServiceProvider).currentUser;
     if (user == null) return;
     setState(() => _processingId = booking.bookingId);
@@ -30,18 +35,42 @@ class _BookingRequestsReviewScreenState
             organizationId: booking.organizationId,
             bookingId: booking.bookingId,
             reviewedBy: user.uid,
+            waiveFinancialCharge: waiveFinancialCharge,
+            waiverReason: waiverReason,
           );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم اعتماد الحجز')),
+          SnackBar(
+            content: Text(
+              waiveFinancialCharge
+                  ? 'تم اعتماد الحجز مع إعفاء رسومه'
+                  : 'تم اعتماد الحجز',
+            ),
+          ),
         );
       }
     } catch (error) {
       debugPrint('[BookingReview] approve failed type=${error.runtimeType}');
-      if (mounted) _showError();
+      if (mounted) _showError(error, service: 'مراجعة الحجوزات');
     } finally {
       if (mounted) setState(() => _processingId = null);
     }
+  }
+
+  Future<void> _approveWithFeeWaiver(BookingModel booking) async {
+    final reason = await showReasonDialog(
+      context: context,
+      title: 'إعفاء رسوم الحجز',
+      hint: 'اكتب سبب الإعفاء',
+      actionLabel: 'اعتماد مع إعفاء',
+      required: true,
+    );
+    if (!mounted || reason == null || reason.trim().isEmpty) return;
+    await _approve(
+      booking,
+      waiveFinancialCharge: true,
+      waiverReason: reason,
+    );
   }
 
   Future<void> _reject(BookingModel booking) async {
@@ -71,7 +100,7 @@ class _BookingRequestsReviewScreenState
       }
     } catch (error) {
       debugPrint('[BookingReview] reject failed type=${error.runtimeType}');
-      if (mounted) _showError();
+      if (mounted) _showError(error, service: 'مراجعة الحجوزات');
     } finally {
       if (mounted) setState(() => _processingId = null);
     }
@@ -104,15 +133,21 @@ class _BookingRequestsReviewScreenState
     } catch (error) {
       debugPrint(
           '[BookingReview] cancellation failed type=${error.runtimeType}');
-      if (mounted) _showError();
+      if (mounted) _showError(error, service: 'مراجعة إلغاء الحجوزات');
     } finally {
       if (mounted) setState(() => _processingId = null);
     }
   }
 
-  void _showError() {
+  void _showError(Object error, {required String service}) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('تعذر تحديث طلب الحجز. حاول مرة أخرى.')),
+      SnackBar(
+        content: Text(firebaseFunctionErrorMessage(
+          error,
+          fallback: 'تعذر تحديث طلب الحجز. حاول مرة أخرى.',
+          unavailableMessage: 'خدمة $service غير متاحة في إصدار الخادم الحالي.',
+        )),
+      ),
     );
   }
 
@@ -129,6 +164,7 @@ class _BookingRequestsReviewScreenState
         membership?.roleId == 'adminManager' ||
         permissions.contains('bookings.manage') ||
         permissions.contains('bookings.approve');
+    final canWaiveBookingFees = access?.canManageFinancialSettings == true;
     final bookings = organizationId == null
         ? null
         : ref.watch(organizationBookingsProvider(organizationId));
@@ -188,10 +224,21 @@ class _BookingRequestsReviewScreenState
                                       'الهاتف: ${booking.requesterPhone.isEmpty ? '-' : booking.requesterPhone}'),
                                   Text(
                                       'التاريخ: ${DateFormat('yyyy/MM/dd').format(booking.bookingDate)}'),
+                                  Text(
+                                    'نوع الحجز: ${booking.bookingCategory == 'event' ? 'مناسبة' : 'عادي'}',
+                                  ),
                                   Text('المناسبة: ${booking.occasionType}'),
                                   Text(booking.status == 'cancellationRequested'
                                       ? 'الحالة: طلب إلغاء بانتظار القرار'
                                       : 'الحالة: قيد المراجعة'),
+                                  if (booking.financialFeeWaived)
+                                    Text(
+                                      'رسوم الحجز: معفاة${booking.financialWaiverReason == null || booking.financialWaiverReason!.isEmpty ? '' : ' — ${booking.financialWaiverReason}'}',
+                                      style: const TextStyle(
+                                        color: Colors.green,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
                                   if (booking.startTime != null ||
                                       booking.endTime != null)
                                     Text(
@@ -239,6 +286,22 @@ class _BookingRequestsReviewScreenState
                                       ),
                                     ],
                                   ),
+                                  if (booking.status == 'pending' &&
+                                      canWaiveBookingFees) ...[
+                                    const SizedBox(height: 8),
+                                    SizedBox(
+                                      width: double.infinity,
+                                      child: OutlinedButton.icon(
+                                        onPressed: processing
+                                            ? null
+                                            : () => _approveWithFeeWaiver(booking),
+                                        icon: const Icon(Icons.money_off),
+                                        label: const Text(
+                                          'اعتماد مع إعفاء رسوم الحجز',
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ],
                               ),
                             ),

@@ -30,10 +30,14 @@ class AdminAccess {
   /// حالة عضوية المستخدم في المجلس المختار (active/suspended/...).
   final String status;
 
+  bool get _isPlainMemberRole => roleId == 'member' || role == 'member';
+
   bool has(String permission) {
-    return isSuperAdmin ||
-        permissions.contains('fullAccess') ||
-        permissions.contains(permission);
+    if (isSuperAdmin) return true;
+    final hasEffectiveFullAccess =
+        !_isPlainMemberRole && permissions.contains('fullAccess');
+    if (permission == 'fullAccess') return hasEffectiveFullAccess;
+    return hasEffectiveFullAccess || permissions.contains(permission);
   }
 
   // ── الأدوار ────────────────────────────────────────────────────────────
@@ -115,12 +119,40 @@ class AdminAccess {
       has('payments.approve') ||
       has('payments.reject');
 
-  bool get canManageFinance =>
+  bool get canManageFinancialSettings =>
       isPlatformOwner ||
       isOrgOwner ||
+      const ['system_owner', 'chairman', 'financialManager'].contains(roleId) ||
+      const ['system_owner', 'chairman', 'financialManager'].contains(role) ||
       has('fullAccess') ||
-      has('payments.manage') ||
-      has('receipts.review');
+      has('payments.manage');
+
+  /// توافق خلفي لاسم القدرة المستخدم في لوحة الإدارة.
+  bool get canManageFinance => canManageFinancialSettings;
+
+  bool get canSendCouncilNotifications =>
+      isPlatformOwner ||
+      isOrgOwner ||
+      isChairman ||
+      has('notifications.send') ||
+      has('announcements.manage');
+
+  bool get canViewFinancialReports =>
+      isPlatformOwner ||
+      isOrgOwner ||
+      const ['chairman', 'financialManager', 'financialReviewer']
+          .contains(roleId) ||
+      has('reports.view') ||
+      has('payments.read') ||
+      canManageFinancialSettings ||
+      canReviewReceipts;
+
+  bool get canManageExpenses =>
+      isPlatformOwner ||
+      isOrgOwner ||
+      const ['chairman', 'financialManager'].contains(roleId) ||
+      has('expenses.manage') ||
+      has('payments.manage');
 
   bool get canReadAudit =>
       isPlatformOwner ||

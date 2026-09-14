@@ -71,7 +71,8 @@ String roleLabelArabic(String? roleId, {String? role, String? fallback}) {
 /// إشعارات المراجعة. القاعدة:
 ///  1) دور مميّز صريح (adminManager/chairman/owner/…) ← يُعرض كما هو.
 ///  2) دور غير مميّز (member/فارغ) لكن صلاحياته إدارية ← لا يُعرض "عضو":
-///       - fullAccess               → "مدير (صلاحيات كاملة)"
+///       - fullAccess لدور إداري     → "مدير (صلاحيات كاملة)"
+///       - fullAccess ملوث مع member → يُتجاهل ولا يصعّد العضو
 ///       - أي صلاحية إدارية أخرى     → "مدير (صلاحيات مخصّصة)"
 ///  3) خلاف ذلك ← التسمية الاسمية ([roleLabelArabic]) ثم "عضو".
 ///
@@ -87,7 +88,8 @@ String effectiveRoleLabelArabic(
   if (explicit != null) return explicit;
 
   // 2) دور غير مميّز: افحص الصلاحيات الفعلية قبل الحكم بأنه "عضو".
-  if (permissions.contains('fullAccess')) {
+  final isMemberRole = roleId == 'member' || role == 'member';
+  if (!isMemberRole && permissions.contains('fullAccess')) {
     return 'مدير (صلاحيات كاملة)';
   }
   if (permissions.any(_managerPermissions.contains)) {

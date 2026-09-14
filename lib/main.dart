@@ -1,6 +1,7 @@
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'core/theme/app_theme.dart';
@@ -10,6 +11,8 @@ import 'core/notifications/notification_tap_listener.dart';
 import 'router/app_router.dart';
 import 'data/services/notification_service.dart';
 import 'firebase_options.dart';
+import 'l10n/generated/app_localizations.dart';
+import 'providers/locale_provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,20 +36,31 @@ class VillageCouncilApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
+    final locale = ref.watch(localeProvider);
 
     return MaterialApp.router(
       debugShowCheckedModeBanner: false,
-      title: 'مجلس القرية',
+      onGenerateTitle: (context) => AppLocalizations.of(context).appTitle,
       theme: AppTheme.theme,
+      locale: locale,
+      supportedLocales: AppLocalizations.supportedLocales,
+      localizationsDelegates: const [
+        AppLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       routerConfig: router,
       builder: (context, child) {
         return Directionality(
-          textDirection: ui.TextDirection.rtl,
+          textDirection: locale.languageCode == 'ar'
+              ? ui.TextDirection.rtl
+              : ui.TextDirection.ltr,
           child: Stack(
             children: [
               NotificationTapListener(child: child!),
               if (kDebugMode && FirebaseEmulatorConfig.enabled)
-                const Positioned(
+                Positioned(
                   top: 0,
                   left: 0,
                   right: 0,
@@ -55,11 +69,12 @@ class VillageCouncilApp extends ConsumerWidget {
                     child: SafeArea(
                       bottom: false,
                       child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 3),
+                        padding: const EdgeInsets.symmetric(vertical: 3),
                         child: Text(
-                          'بيئة اختبار محلية',
+                          AppLocalizations.of(context).localTestEnvironment,
                           textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.white, fontSize: 12),
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 12),
                         ),
                       ),
                     ),

@@ -1,0 +1,322 @@
+{
+  "@@locale": "en",
+  "appTitle": "Village Council",
+  "councilDashboard": "Council Dashboard",
+  "currentCouncil": "Current Council",
+  "switchCouncil": "Switch council",
+  "chooseCouncil": "Choose a council",
+  "noCouncilSelected": "No council selected",
+  "returnHome": "Return home",
+  "welcomeBack": "Welcome back",
+  "member": "Member",
+  "memberNumber": "Member number",
+  "role": "Role",
+  "status": "Status",
+  "active": "Active",
+  "pending": "Pending review",
+  "approved": "Approved",
+  "suspended": "Suspended",
+  "rejected": "Rejected",
+  "cancelled": "Cancelled",
+  "removed": "Removed",
+  "resigned": "Resigned",
+  "platformAdministrator": "Platform administrator",
+  "councilOwnerRole": "Council Owner",
+  "chairmanRole": "Chairman",
+  "administrativeManagerRole": "Administrative Manager",
+  "financialManagerRole": "Financial Manager",
+  "financialReviewerRole": "Financial Reviewer",
+  "memberRole": "Member",
+  "selectLanguage": "Choose language",
+  "arabic": "العربية",
+  "english": "English",
+  "language": "Language",
+  "members": "Members",
+  "upcomingBookings": "Upcoming bookings",
+  "receiptsPendingReview": "Receipts pending review",
+  "outstandingSubscriptions": "Outstanding subscriptions",
+  "statisticsUnavailable": "Unavailable",
+  "dailyOperations": "Daily Operations",
+  "dailyOperationsDescription": "Bookings, members, subscriptions and communication",
+  "finance": "Finance",
+  "financeDescription": "Council fees, receipts and financial follow-up",
+  "councilManagement": "Council Management",
+  "councilManagementDescription": "Council information, permissions and settings",
+  "bookings": "Bookings",
+  "membersManagement": "Members",
+  "subscriptions": "Subscriptions",
+  "notifications": "Notifications",
+  "feesAndSubscriptions": "Fees & Subscriptions",
+  "receipts": "Receipts",
+  "paymentReview": "Payment Review",
+  "financialReports": "Financial Reports",
+  "councilInformation": "Council Information",
+  "permissions": "Permissions",
+  "councilSettings": "Council Settings",
+  "activityLog": "Activity Log",
+  "quickActions": "Quick Actions",
+  "newBooking": "New Booking",
+  "uploadReceipt": "Upload Receipt",
+  "reviewReceipt": "Review Receipt",
+  "manageMembers": "Manage Members",
+  "recentActivity": "Recent Activity",
+  "importantAlerts": "Important Alerts",
+  "noRecentActivity": "No recent activity for this council",
+  "noImportantAlerts": "Everything is up to date",
+  "viewAllNotifications": "View all notifications",
+  "pendingReceiptsAlert": "Receipts need review",
+  "pendingBookingsAlert": "Booking requests need review",
+  "overdueSubscriptionsAlert": "Subscriptions are overdue",
+  "itemsCount": "{count} items",
+  "@itemsCount": {"placeholders": {"count": {"type": "int"}}},
+  "loading": "Loading…",
+  "retry": "Retry",
+  "couldNotLoad": "Could not load data",
+  "couldNotSwitchCouncil": "Could not switch council",
+  "searchCouncils": "Search councils",
+  "serviceComingSoon": "This service will be available soon",
+  "noAdditionalInformation": "No additional information",
+  "membershipStatus": "Membership status",
+  "fullPlatformAccess": "Full platform administrator access",
+  "generalPaymentReceipt": "General payment receipt",
+  "openNavigation": "Open navigation",
+  "home": "Home",
+  "close": "Close",
+  "today": "Today",
+  "yesterday": "Yesterday",
+  "localTestEnvironment": "Local test environment"
+  ,"systemAdministration": "System Administration"
+  ,"systemAdministrationDescription": "Manage councils, users, and platform settings"
+  ,"systemAccessDenied": "Only the system owner can access System Administration"
+  ,"totalCouncils": "Total Councils"
+  ,"activeCouncils": "Active Councils"
+  ,"pendingActions": "Pending Actions"
+  ,"pendingJoinRequests": "Pending join requests"
+  ,"createCouncil": "Create Council"
+  ,"manageCouncils": "Manage Councils"
+  ,"councilsInSystem": "Councils in the System"
+  ,"councilsInSystemDescription": "View and manage councils registered on the platform"
+  ,"noCouncils": "No councils are registered"
+  ,"systemHome": "System Home"
+  ,"systemAlerts": "System Alerts"
+  ,"noSystemAlerts": "No system alerts require action"
+  ,"pendingActionsAlert": "Join requests across councils need review"
+  ,"archived": "Archived"
+  ,"inactive": "Inactive"
+  ,"createdOn": "Created on"
+  ,"openCouncil": "Open Council"
+  ,"manage": "Manage"
+  ,"couldNotOpenCouncil": "Could not open this council"
+  ,"backToSystemAdministration": "Back to System Administration"
+  ,"systemOwner": "System Owner"
+  ,"profile": "Profile"
+  ,"unavailable": "Unavailable"
+  ,"mainHome": "Home"
+  ,"welcomeUser": "Welcome, {name}"
+  ,"@welcomeUser": {"placeholders": {"name": {"type": "String"}}}
+  ,"myAccount": "My Account"
+  ,"payments": "Payments"
+  ,"services": "Services"
+  ,"upcomingBooking": "Your upcoming booking"
+  ,"noUpcomingBooking": "You have no upcoming booking"
+  ,"bookNow": "Book now"
+  ,"viewDetails": "View details"
+  ,"outstandingAmount": "Outstanding amount"
+  ,"latestNotification": "Latest notification"
+  ,"noNotifications": "No notifications yet"
+  ,"markAllAsRead": "Mark all as read"
+  ,"signInToViewNotifications": "Sign in to view notifications"
+  ,"couldNotLoadNotifications": "Could not load notifications. Try again."
+  ,"couldNotUpdateNotification": "Could not update the notification. Try again."
+  ,"councilDashboardDescription": "Manage council operations and finances"
+  ,"accountSection": "Account"
+  ,"personalInformation": "Personal Information"
+  ,"securityAndPassword": "Security & Password"
+  ,"notificationSettings": "Notification Settings"
+  ,"councilsAndMemberships": "Councils & Memberships"
+  ,"myCouncils": "My Councils"
+  ,"membershipsAndRoles": "Memberships & Roles"
+  ,"membershipDetails": "Membership Details"
+  ,"myPaymentsAndReceipts": "My Payments & Receipts"
+  ,"mySubscriptions": "My Subscriptions"
+  ,"help": "Help"
+  ,"contactUs": "Contact Us"
+  ,"legal": "Legal"
+  ,"aboutApp": "About the App"
+  ,"editProfile": "Edit Profile"
+  ,"signOut": "Sign Out"
+  ,"basicMember": "Member"
+  ,"noActiveMembership": "No active membership is available"
+  ,"chooseCouncilForService": "Choose a council to continue"
+  ,"bookingDate": "Booking date"
+  ,"occasion": "Occasion"
+  ,"currentCouncil": "Current council"
+  ,"membershipRole": "Membership role"
+  ,"notAvailableYet": "Not available yet"
+  ,"joinCouncil": "Join a Council"
+  ,"councilBookings": "Council Bookings"
+  ,"accessDenied": "You do not have permission to access this page"
+  ,"approvedUpcomingBookings": "Upcoming Confirmed Bookings"
+  ,"noUpcomingBookings": "No upcoming bookings"
+  ,"bookingNumber": "Booking #{number}"
+  ,"@bookingNumber": {"placeholders": {"number": {"type": "String"}}}
+  ,"bookingStatus": "Booking status"
+  ,"approved": "Approved"
+  ,"additionalRequests": "Additional requests: {count}"
+  ,"@additionalRequests": {"placeholders": {"count": {"type": "int"}}}
+  ,"sendNotification": "Send Notification"
+  ,"confirmSendNotification": "Confirm notification"
+  ,"sendToAllCouncilMembers": "This notification will be sent only to active members of the current council."
+  ,"send": "Send"
+  ,"notificationSentTo": "Notification sent to {count} members"
+  ,"@notificationSentTo": {"placeholders": {"count": {"type": "int"}}}
+  ,"couldNotSendNotification": "Could not send the notification"
+  ,"serviceUnavailable": "The service is unavailable in the current server version"
+  ,"notificationTitle": "Notification title"
+  ,"notificationBody": "Notification message"
+  ,"requiredField": "This field is required"
+  ,"expenses": "Expenses"
+  ,"addExpense": "Add Expense"
+  ,"noExpenses": "No expenses recorded"
+  ,"couldNotSaveExpense": "Could not save the expense"
+  ,"expenseDescription": "Expense description"
+  ,"amountOmr": "Amount in OMR"
+  ,"invalidPositiveAmount": "Enter a valid positive amount with up to three decimal places"
+  ,"expenseCategory": "Expense category"
+  ,"expenseDate": "Expense date"
+  ,"supplier": "Supplier (optional)"
+  ,"invoiceNumber": "Invoice number (optional)"
+  ,"notes": "Notes"
+  ,"save": "Save"
+  ,"expenseBills": "Bills"
+  ,"expenseElectricity": "Electricity"
+  ,"expenseWater": "Water"
+  ,"expenseCommunications": "Communications"
+  ,"expenseSupplies": "Supplies"
+  ,"expenseMaintenance": "Maintenance"
+  ,"expenseCleaning": "Cleaning"
+  ,"expenseEquipment": "Equipment"
+  ,"expenseHospitality": "Hospitality"
+  ,"expenseOther": "Other"
+  ,"thisMonth": "This Month"
+  ,"previousMonth": "Previous Month"
+  ,"thisYear": "This Year"
+  ,"customPeriod": "Custom Period"
+  ,"totalCollected": "Total Collected"
+  ,"totalOutstanding": "Total Outstanding"
+  ,"bookingRevenue": "Booking Revenue"
+  ,"packageRevenue": "Packages & Add-ons"
+  ,"totalExpenses": "Total Expenses"
+  ,"netPosition": "Net Position"
+  ,"membersPaid": "Members Paid"
+  ,"membersUnpaid": "Members Unpaid"
+  ,"membershipRevenue": "Membership Revenue"
+  ,"expenseBreakdown": "Expense Breakdown"
+  ,"reviewedBy": "Reviewed by"
+  ,"bookedDate": "Booked Date"
+  ,"bookedDateRequestWarning": "This date already has a confirmed booking. You may still submit a request, which will be reviewed by the council administration."
+  ,"continueAction": "Continue"
+  ,"booked": "Booked"
+  ,"expenseAttachment": "Invoice or receipt attachment"
+  ,"optionalPdfOrImage": "Optional — image or PDF up to 10 MB"
+  ,"edit": "Edit"
+  ,"confirm": "Confirm"
+  ,"cancelExpense": "Cancel Expense"
+  ,"cancelExpenseConfirmation": "The expense will remain in the audit trail but will be excluded from totals. Continue?"
+  ,"cancel": "Cancel"
+  ,"couldNotUpdateNotification": "Could not update the notification. Please try again."
+  ,"transactionDetails": "Transaction Details"
+  ,"noCurrentCouncil": "No council is currently selected."
+  ,"couldNotLoadTransaction": "Could not load the transaction."
+  ,"transactionNotFound": "Transaction not found."
+  ,"couldNotOpenReceipt": "Could not open the receipt. Check your access and the file."
+  ,"secureReceiptServiceUnavailable": "Secure receipt access is unavailable in the current server version."
+  ,"rejectionReason": "Rejection reason"
+  ,"receiptAllocation": "Receipt Allocation"
+  ,"openingReceipt": "Opening receipt..."
+  ,"viewReceiptFile": "View Receipt File"
+  ,"transactionPath": "Transaction Path"
+  ,"receiptSubmittedStep": "Receipt submitted"
+  ,"receiptReviewStep": "Amount and allocation review"
+  ,"receiptRejectedStep": "Receipt rejected"
+  ,"receiptAllocationApprovedStep": "Allocation approved"
+  ,"loginSubtitle": "Council subscriptions and services"
+  ,"phoneNumber": "Phone number"
+  ,"password": "Password"
+  ,"enterPhoneNumber": "Enter your phone number"
+  ,"phoneMustBeEightDigits": "The phone number must contain 8 digits"
+  ,"enterPassword": "Enter your password"
+  ,"login": "Sign in"
+  ,"loginInstructions": "Enter your phone number and password to continue"
+  ,"createNewAccount": "Create a new account"
+  ,"accountDataNotFound": "Account details could not be found. Contact council administration."
+  ,"invalidLoginCredentials": "The phone number or password is incorrect"
+  ,"findAndJoinCouncil": "Find and Join a Council"
+  ,"findCouncilDescription": "Search the available councils and send a membership request."
+  ,"searchByCouncilName": "Search by council name"
+  ,"noMatchingCouncils": "No councils match your search"
+  ,"noCouncilsAvailableToJoin": "No councils are available to join right now"
+  ,"requestToJoin": "Request to Join"
+  ,"joinAnotherCouncil": "Join Another Council"
+  ,"joinRequestSent": "Your membership request was sent"
+  ,"joinRequestPending": "Pending"
+  ,"joinRequestApproved": "Approved"
+  ,"joinRequestRejected": "Rejected"
+  ,"joinRequestAlreadyPending": "A membership request for this council is already pending"
+  ,"activeMembershipAlreadyExists": "You already have an active membership in this council"
+  ,"couldNotSendJoinRequest": "Could not send the membership request. Try again."
+  ,"alreadyJoined": "Joined"
+  ,"couldNotLoadAccount": "Could not load your account. Try again."
+  ,"couldNotFindUser": "User details could not be found"
+  ,"couldNotLoadProfile": "Could not load your profile. Try again."
+  ,"couldNotLoadCouncils": "Could not load the available councils"
+  ,"couldNotLoadJoinRequests": "Could not load your membership requests"
+  ,"optionalJoinReason": "Reason for joining (optional)"
+  ,"applicantDetails": "Applicant details"
+  ,"civilId": "Civil ID"
+  ,"phone": "Phone"
+  ,"email": "Email"
+  ,"address": "Address"
+  ,"council": "Council"
+  ,"sendRequest": "Send Request"
+  ,"invalidJoinCode": "The invitation code is invalid or expired"
+  ,"notificationAuthRequired": "Your sign-in session has ended. Sign in and try again."
+  ,"notificationPermissionDenied": "You do not have permission to send notifications for the current council."
+  ,"notificationRateLimited": "Too many attempts. Wait a moment and try again."
+  ,"notificationNetworkError": "The notification service could not be reached. Check your connection and try again."
+  ,"notificationInvalidData": "The notification details are invalid. Review them and try again."
+  ,"notificationAlreadySent": "This notification was already sent."
+  ,"notificationSecurityVerificationFailed": "The secure session could not be verified. Try again; if the issue continues, contact support."
+  ,"receiptReviewTitle": "Receipt Review"
+  ,"noReceiptReviewPermission": "You do not have permission to review this council's receipts."
+  ,"receiptsLoadRetry": "Could not load receipts. Try again."
+  ,"noPendingReceipts": "There are no receipts pending review."
+  ,"receiptApprovedAndAllocated": "The receipt was approved and allocated to the charges."
+  ,"receiptApprovalFailed": "Approval failed. A charge balance may have changed."
+  ,"receiptApprovalUnavailable": "Receipt approval is unavailable in the current server version."
+  ,"receiptRejectionReason": "Receipt rejection reason"
+  ,"receiptRejectionReasonHint": "Enter a clear required reason"
+  ,"rejectReceipt": "Reject Receipt"
+  ,"receiptRejectedWithoutPayment": "The receipt was rejected without applying a payment."
+  ,"receiptRejectionFailed": "Could not reject the receipt. Try again."
+  ,"receiptReviewUnavailable": "Receipt review is unavailable in the current server version."
+  ,"receiptOpenFailed": "Could not open the receipt. Check your permission and the file."
+  ,"receiptOpenUnavailable": "Secure receipt access is unavailable in the current server version."
+  ,"membershipNumberValue": "Membership number: {value}"
+  ,"@membershipNumberValue": {"placeholders":{"value":{"type":"String"}}}
+  ,"submittedAtValue": "Submitted: {value}"
+  ,"@submittedAtValue": {"placeholders":{"value":{"type":"String"}}}
+  ,"payerEnteredAmount": "Amount entered by payer"
+  ,"allocationTotal": "Allocation total:"
+  ,"amountDifference": "Difference:"
+  ,"amountMatchesAllocation": "Amount matches the allocation"
+  ,"incompleteReceiptApprovalDisabled": "Receipt details are incomplete — approval disabled"
+  ,"differenceApprovalDisabled": "Amounts differ — approval disabled"
+  ,"paidBeneficiariesCount": "Beneficiaries paid for ({count})"
+  ,"@paidBeneficiariesCount": {"placeholders":{"count":{"type":"int"}}}
+  ,"balanceAtSubmission": "Balance at submission:"
+  ,"openPdfFile": "Open PDF"
+  ,"viewReceiptImage": "View receipt image"
+  ,"reject": "Reject"
+  ,"approve": "Approve"
+}

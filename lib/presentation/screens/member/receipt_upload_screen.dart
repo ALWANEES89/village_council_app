@@ -8,8 +8,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../../../core/theme/app_theme.dart';
+import '../../../core/errors/firebase_function_error_message.dart';
 import '../../../core/formatters/omr_currency.dart';
+import '../../../core/theme/app_theme.dart';
 import '../../../data/models/financial_models.dart';
 import '../../../data/models/transaction_model.dart';
 import '../../../domain/financial/financial_logic.dart';
@@ -66,7 +67,9 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _initializeSelf());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _initializeSelf();
+    });
   }
 
   @override
@@ -97,6 +100,7 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
   Future<void> _loadCharges(String membershipId,
       {String? initialChargeId}) async {
     if (_chargesByMember.containsKey(membershipId)) return;
+    if (!mounted) return;
     setState(() => _loadingCharges = true);
     try {
       final charges =
@@ -123,6 +127,7 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
   }
 
   void _changeScope(PaymentScope scope) {
+    if (!mounted) return;
     final selfId = _payerMembershipId;
     setState(() {
       _scope = scope;
@@ -143,6 +148,7 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
   }
 
   void _onSearchChanged(String value) {
+    if (!mounted) return;
     _debounce?.cancel();
     final normalized = normalizeArabicSearch(value);
     if (normalized.length < 3) {
@@ -153,6 +159,7 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
   }
 
   Future<void> _search(String value) async {
+    if (!mounted) return;
     setState(() => _searching = true);
     try {
       final results = await ref.read(financialRepositoryProvider).searchMembers(
@@ -165,13 +172,22 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
           .toList());
     } catch (error) {
       debugPrint('[Receipts] member search failed type=${error.runtimeType}');
-      _showMessage('تعذر البحث عن الأعضاء. حاول مجددًا.', error: true);
+      _showMessage(
+        firebaseFunctionErrorMessage(
+          error,
+          fallback: 'تعذر البحث عن الأعضاء. حاول مجددًا.',
+          unavailableMessage:
+              'خدمة البحث عن أعضاء المجلس غير متاحة في إصدار الخادم الحالي.',
+        ),
+        error: true,
+      );
     } finally {
       if (mounted) setState(() => _searching = false);
     }
   }
 
   Future<void> _addBeneficiary(MemberDirectoryEntry entry) async {
+    if (!mounted) return;
     if (_beneficiaries.containsKey(entry.membershipId)) {
       _showMessage('تم اختيار هذا العضو مسبقًا.');
       return;
@@ -245,7 +261,7 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
 
   Future<void> _pickImage(ImageSource source) async {
     final image = await ImagePicker().pickImage(source: source);
-    if (image == null) return;
+    if (image == null || !mounted) return;
     setState(() {
       _selectedFile = File(image.path);
       _fileName = image.name;
@@ -257,7 +273,7 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
     final result = await FilePicker.platform
         .pickFiles(type: FileType.custom, allowedExtensions: const ['pdf']);
     final path = result?.files.single.path;
-    if (path == null) return;
+    if (path == null || !mounted) return;
     setState(() {
       _selectedFile = File(path);
       _fileName = result!.files.single.name;
@@ -279,6 +295,7 @@ class _ReceiptUploadScreenState extends ConsumerState<ReceiptUploadScreen> {
   }
 
   void _onAmountChanged(String _) {
+    if (!mounted) return;
     if (_allocations.length == 1) {
       final chargeId = _allocations.keys.single;
       final charge = _chargeById(chargeId);

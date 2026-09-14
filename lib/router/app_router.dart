@@ -7,6 +7,7 @@ import '../presentation/screens/auth/otp_screen.dart';
 import '../presentation/screens/auth/register_screen.dart';
 import '../presentation/screens/member/member_dashboard.dart';
 import '../presentation/screens/member/member_home_screen.dart';
+import '../presentation/screens/member/my_account_screen.dart';
 import '../presentation/screens/member/profile_edit_screen.dart';
 import '../presentation/screens/member/receipt_upload_screen.dart';
 import '../presentation/screens/member/transaction_timeline_screen.dart';
@@ -32,9 +33,24 @@ import '../features/member_management/presentation/member_details_screen.dart';
 import '../features/member_management/presentation/member_permissions_screen.dart';
 import '../features/audit/presentation/audit_logs_screen.dart';
 import '../presentation/screens/council/council_dashboard_screen.dart';
+import '../presentation/screens/council/council_bookings_screen.dart';
+import '../presentation/screens/council/expenses_screen.dart';
+import '../presentation/screens/council/financial_report_screen.dart';
+import '../presentation/screens/council/important_alerts_screen.dart';
+import '../presentation/screens/council/send_council_notification_screen.dart';
 
 class _RouterRefreshNotifier extends ChangeNotifier {
-  void refresh() => notifyListeners();
+  bool _refreshScheduled = false;
+
+  void refresh() {
+    if (_refreshScheduled) return;
+    _refreshScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _refreshScheduled = false;
+      if (!hasListeners) return;
+      notifyListeners();
+    });
+  }
 }
 
 final routerProvider = Provider<GoRouter>((ref) {
@@ -61,9 +77,6 @@ final routerProvider = Provider<GoRouter>((ref) {
       }
       if (!isLoggedIn && !isOnLogin && !isOnOtp && !isOnRegister) {
         return '/login';
-      }
-      if (isLoggedIn && isOnLogin) {
-        return '/member-home';
       }
       return null;
     },
@@ -137,6 +150,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const MemberHomeScreen(),
       ),
       GoRoute(
+        path: '/account',
+        name: 'myAccount',
+        builder: (_, __) => const MyAccountScreen(),
+      ),
+      GoRoute(
         path: '/notifications',
         name: 'notifications',
         builder: (_, __) => const NotificationsScreen(),
@@ -160,6 +178,31 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/council',
         name: 'councilDashboard',
         builder: (_, __) => const CouncilDashboardScreen(),
+      ),
+      GoRoute(
+        path: '/council/bookings',
+        name: 'councilBookings',
+        builder: (_, __) => const CouncilBookingsScreen(),
+      ),
+      GoRoute(
+        path: '/council/alerts',
+        name: 'importantAlerts',
+        builder: (_, __) => const ImportantAlertsScreen(),
+      ),
+      GoRoute(
+        path: '/council/notifications/send',
+        name: 'sendCouncilNotification',
+        builder: (_, __) => const SendCouncilNotificationScreen(),
+      ),
+      GoRoute(
+        path: '/council/finance/report',
+        name: 'financialReport',
+        builder: (_, __) => const FinancialReportScreen(),
+      ),
+      GoRoute(
+        path: '/council/finance/expenses',
+        name: 'expenses',
+        builder: (_, __) => const ExpensesScreen(),
       ),
       GoRoute(
         path: '/upload-receipt',

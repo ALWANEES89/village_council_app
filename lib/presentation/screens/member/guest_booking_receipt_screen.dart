@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../../core/errors/firebase_function_error_message.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/financial_models.dart';
 import '../../../providers/app_providers.dart';
@@ -120,7 +121,14 @@ class _GuestBookingReceiptScreenState
       }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تعذر إرسال الإيصال. حاول مجددًا.')),
+          SnackBar(
+            content: Text(firebaseFunctionErrorMessage(
+              error,
+              fallback: 'تعذر إرسال الإيصال. حاول مجددًا.',
+              unavailableMessage:
+                  'خدمة إرسال إيصال الحجز غير متاحة في إصدار الخادم الحالي.',
+            )),
+          ),
         );
       }
     } finally {

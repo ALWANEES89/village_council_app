@@ -475,6 +475,7 @@ exports.auditOrganizationWrite = onDocumentWritten(
     const { organizationId } = event.params;
     const { before, after } = beforeAfter(event);
     const FIELDS = ["status", "officialNameArabic", "shortName", "joinQrEnabled"];
+    const profileFields = ["description", "councilProfile", "phone", "email", "address"];
 
     if (!before && after) {
       return writeAudit(event.id, {
@@ -501,16 +502,85 @@ exports.auditOrganizationWrite = onDocumentWritten(
     if (before && after) {
       const statusChanged = before.status !== after.status;
       const otherChanged = !equal(pick(before, FIELDS), pick(after, FIELDS));
-      if (!statusChanged && !otherChanged) return;
+      const profileChanged = !equal(
+        pick(before, profileFields),
+        pick(after, profileFields),
+      );
+      if (!statusChanged && !otherChanged && !profileChanged) return;
       return writeAudit(event.id, {
         organizationId,
         action: statusChanged ? "organization.status_changed" : "organization.updated",
         targetType: "organization",
         targetId: organizationId,
         actorUserId: firstDefined(after.updatedBy, after.createdBy),
-        oldValue: pick(before, FIELDS),
-        newValue: pick(after, FIELDS),
+        oldValue: {...pick(before, FIELDS), profileChanged},
+        newValue: {...pick(after, FIELDS), profileChanged},
       });
     }
   }
+);
+
+// ── إعلانات المجلس ─────────────────────────────────────────────────────────
+exports.auditAnnouncementWrite = onDocumentWritten(
+  { document: "organizations/{organizationId}/announcements/{announcementId}", region: REGION },
+  async (event) => {
+    const { organizationId, announcementId } = event.params;
+    const { before, after } = beforeAfter(event);
+    if (!after) return;
+    if (before && equal(pick(before, ["title", "status"]), pick(after, ["title", "status"]))) {
+      return;
+    }
+    return writeAudit(event.id, {
+      organizationId,
+      action: before ? "announcement.updated" : "announcement.created",
+      targetType: "announcement",
+      targetId: announcementId,
+      actorUserId: firstDefined(after.updatedBy, after.createdBy),
+      oldValue: before ? pick(before, ["title", "status"]) : null,
+      newValue: pick(after, ["title", "status"]),
+    });
+  },
+);
+
+// ── مصروفات المجلس ─────────────────────────────────────────────────────────
+exports.auditExpenseWrite = onDocumentWritten(
+  { document: "organizations/{organizationId}/expenses/{expenseId}", region: REGION },
+  async (event) => {
+    const { organizationId, expenseId } = event.params;
+    const { before, after } = beforeAfter(event);
+    if (!after) return;
+    const expenseFields = [
+      "title", "category", "amountBaisa", "expenseDate", "note", "supplier",
+      "invoiceNumber", "attachmentStoragePath", "status",
+    ];
+    if (before && equal(pick(before, expenseFields), pick(after, expenseFields))) return;
+    const wasCancelled = before && before.status !== "cancelled" && after.status === "cancelled";
+    return writeAudit(event.id, {
+      organizationId,
+      action: !before ? "expense.created" : wasCancelled ? "expense.cancelled" : "expense.updated",
+      targetType: "expense",
+      targetId: expenseId,
+      actorUserId: firstDefined(after.cancelledBy, after.updatedBy, after.createdBy),
+      oldValue: before ? pick(before, expenseFields) : null,
+      newValue: pick(after, expenseFields),
+    });
+  },
+);
+
+exports.auditCouncilBroadcastWrite = onDocumentWritten(
+  { document: "organizations/{organizationId}/broadcasts/{broadcastId}", region: REGION },
+  async (event) => {
+    const { organizationId, broadcastId } = event.params;
+    const { before, after } = beforeAfter(event);
+    if (!after || before) return;
+    return writeAudit(event.id, {
+      organizationId,
+      action: "broadcast.created",
+      targetType: "broadcast",
+      targetId: broadcastId,
+      actorUserId: firstDefined(after.createdBy),
+      oldValue: null,
+      newValue: pick(after, ["title"]),
+    });
+  },
 );

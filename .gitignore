@@ -68,6 +68,8 @@ firestore-debug.log*
 dataconnect-generated/
 .claude/settings.local.json
 .firebase-cli-config/
+android/app/src/main/assets/adi-registration.properties
+project-brain/*screenshots/
 
 # ملفات بيانات حسّاسة (أرقام حسابات) — لا تُرفع
 *.xlsx

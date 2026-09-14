@@ -1,604 +1,704 @@
-import 'dart:ui' as ui;
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
-import '../../../core/theme/app_theme.dart';
-import '../../../data/models/transaction_model.dart';
-import '../../../data/models/organization_model.dart';
-import '../../../providers/app_providers.dart';
-import '../../widgets/notification_bell.dart';
-import '../../widgets/omr_amount.dart';
 
-class AdminDashboard extends ConsumerWidget {
+import '../../../core/theme/app_theme.dart';
+import '../../../domain/dashboard/system_dashboard_metrics.dart';
+import '../../../l10n/generated/app_localizations.dart';
+import '../../../providers/app_providers.dart';
+
+class AdminDashboard extends ConsumerStatefulWidget {
   const AdminDashboard({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final accessAsync = ref.watch(adminAccessProvider);
-    if (accessAsync.isLoading) {
+  ConsumerState<AdminDashboard> createState() => _AdminDashboardState();
+}
+
+class _AdminDashboardState extends ConsumerState<AdminDashboard> {
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
+  final _councilsKey = GlobalKey();
+  String _query = '';
+  String? _openingId;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final access = ref.watch(systemOwnerAccessProvider);
+    if (access.isLoading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    final access = accessAsync.asData?.value;
-    // سجلّات تطوير مؤقتة (debug فقط) لتشخيص ظهور اللوحة الذهبية.
-    assert(() {
-      debugPrint('[Access] goldenPanel org='
-          '${ref.read(organizationContextProvider).currentOrganization?['organizationId']} '
-          'isSuperAdmin=${access?.isSuperAdmin} isSystemOwner=${access?.isSystemOwner} '
-          'roleId=${access?.roleId} role=${access?.role} status=${access?.status} '
-          'canAccessGoldenAdminPanel=${access?.canAccessGoldenAdminPanel} '
-          'canManageMembers=${access?.canManageMembers} '
-          'canChangeRoles=${access?.canChangeRoles}');
-      return true;
-    }());
-    if (access?.canOpenAdmin != true) {
+    if (access.hasError || access.valueOrNull != true) {
       return Scaffold(
-        appBar: AppBar(),
-        body: const Center(child: Text('لا تملك صلاحية دخول لوحة التحكم')),
+        appBar: AppBar(
+          title: Text(l.systemAdministration),
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.lock_outline,
+                  size: 56, color: AppColors.primary),
+              const SizedBox(height: 14),
+              Text(l.systemAccessDenied, textAlign: TextAlign.center),
+              const SizedBox(height: 16),
+              OutlinedButton(
+                onPressed: () => context.goNamed('memberHome'),
+                child: Text(l.returnHome),
+              ),
+            ]),
+          ),
+        ),
       );
     }
-    final currentOrganization =
-        ref.watch(organizationContextProvider).currentOrganization;
-    final organizationContext = ref.watch(organizationContextProvider);
-    final organizationId = currentOrganization?['organizationId'] as String?;
-    final roleId = organizationContext.currentRole?['roleId'] as String? ??
-        organizationContext.currentMembership?.roleId;
-    final canReviewReceipts = access?.isSuperAdmin == true ||
-        access?.canReviewReceipts == true ||
-        const ['chairman', 'financialManager', 'financialReviewer']
-            .contains(roleId);
-    final membershipPermissions =
-        organizationContext.currentMembership?.permissionsSnapshot ?? const [];
-    final canReviewBookings = access?.isSuperAdmin == true ||
-        roleId == 'chairman' ||
-        membershipPermissions.contains('bookings.manage') ||
-        membershipPermissions.contains('bookings.approve');
-    final pendingReceipts = organizationId == null
-        ? null
-        : ref.watch(pendingFinancialReceiptsProvider(organizationId));
-    final organizationName = _organizationName(currentOrganization);
 
-    return Directionality(
-      textDirection: ui.TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: AppColors.background,
-        body: CustomScrollView(
-          slivers: [
-            SliverAppBar(
-              expandedHeight: 90,
-              floating: true,
-              pinned: true,
-              backgroundColor: AppColors.primaryDark,
-              flexibleSpace: FlexibleSpaceBar(
-                title: Text(organizationName,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 18)),
-                background: Container(
-                    decoration: const BoxDecoration(
-                        gradient: LinearGradient(
-                            colors: [AppColors.primaryDark, AppColors.primary],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight))),
+    final organizationsState = ref.watch(allOrganizationsProvider);
+    final summaryState = ref.watch(systemDashboardSummaryProvider);
+    final user = ref.watch(authStateProvider).valueOrNull;
+    final profile = user == null
+        ? null
+        : ref.watch(userProfileProvider(user.uid)).valueOrNull;
+    final language = Localizations.localeOf(context).languageCode;
+    final query = _query.trim().toLowerCase();
+    final organizations = (organizationsState.valueOrNull ?? const [])
+        .where((org) => query.isEmpty || _searchText(org).contains(query))
+        .toList();
+
+    return Scaffold(
+      key: _scaffoldKey,
+      backgroundColor: const Color(0xFFF5F7FB),
+      drawer: _SystemDrawer(
+        onHome: () => _closeDrawerAndScroll(null),
+        onCouncils: () => _closeDrawerAndScroll(_councilsKey),
+      ),
+      appBar: AppBar(
+        title: Text(l.systemAdministration),
+      ),
+      body: RefreshIndicator(
+        onRefresh: () async {
+          ref.invalidate(allOrganizationsProvider);
+          ref.invalidate(systemDashboardSummaryProvider);
+          await ref.read(allOrganizationsProvider.future);
+        },
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          children: [
+            _SystemHeader(
+              name: profile?.fullName ?? user?.displayName ?? l.systemOwner,
+              photoUrl: profile?.photoUrl,
+              onProfile: () => context.pushNamed('profileEdit'),
+            ),
+            const SizedBox(height: 18),
+            _SystemSummary(state: summaryState),
+            const SizedBox(height: 20),
+            _QuickActions(
+              onCreate: () => context.pushNamed('createOrganization'),
+              onManage: () => context.pushNamed('organizationsManagement'),
+            ),
+            const SizedBox(height: 20),
+            _SystemAlerts(state: summaryState),
+            const SizedBox(height: 20),
+            KeyedSubtree(
+              key: _councilsKey,
+              child: _Heading(
+                title: l.councilsInSystem,
+                subtitle: l.councilsInSystemDescription,
+                icon: Icons.account_balance_outlined,
               ),
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back_ios, color: Colors.white),
-                onPressed: () => context.pop(),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              textInputAction: TextInputAction.search,
+              decoration: InputDecoration(
+                hintText: l.searchCouncils,
+                prefixIcon: const Icon(Icons.search),
+                filled: true,
+                fillColor: Colors.white,
               ),
-              actions: [
-                const NotificationBell(color: Colors.white),
-                if (access?.isSuperAdmin == true)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 4),
-                    child: Icon(Icons.workspace_premium, color: Colors.amber),
+              onChanged: (value) => setState(() => _query = value),
+            ),
+            const SizedBox(height: 12),
+            if (organizationsState.isLoading)
+              const Padding(
+                padding: EdgeInsets.all(32),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (organizationsState.hasError)
+              _Message(
+                icon: Icons.cloud_off_outlined,
+                text: l.couldNotLoad,
+                action: l.retry,
+                onTap: () => ref.invalidate(allOrganizationsProvider),
+              )
+            else if (organizations.isEmpty)
+              _Message(icon: Icons.inbox_outlined, text: l.noCouncils)
+            else
+              for (final org in organizations) ...[
+                _CouncilCard(
+                  organization: org,
+                  language: language,
+                  counts: summaryState
+                      .valueOrNull?.countsByOrganization[org['organizationId']],
+                  opening: _openingId == org['organizationId'],
+                  onOpen: () => _openCouncil(org),
+                  onManage: () => context.pushNamed(
+                    'createOrganization',
+                    extra: org,
                   ),
-                IconButton(
-                  icon: const Icon(Icons.refresh, color: Colors.white),
-                  onPressed: () {
-                    if (organizationId != null) {
-                      ref.invalidate(
-                        pendingFinancialReceiptsProvider(organizationId),
-                      );
-                    }
-                  },
                 ),
+                const SizedBox(height: 12),
               ],
-            ),
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'المجلس الحالي: $organizationName',
-                      style: const TextStyle(
-                        color: AppColors.primaryDark,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    if (access?.isSuperAdmin == true) ...[
-                      const SizedBox(height: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.amber.shade100,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: Colors.amber.shade700),
-                        ),
-                        child: Text(
-                          'Super Admin',
-                          style: TextStyle(
-                            color: Colors.amber.shade900,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 14),
-                    if (access?.canReviewRequests == true)
-                      Card(
-                        margin: EdgeInsets.zero,
-                        child: ListTile(
-                          leading: const CircleAvatar(
-                            backgroundColor: AppColors.primary,
-                            foregroundColor: Colors.white,
-                            child: Icon(Icons.how_to_reg),
-                          ),
-                          title: const Text(
-                            'طلبات الانضمام',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          subtitle: const Text('مراجعة واعتماد طلبات العضوية'),
-                          trailing:
-                              const Icon(Icons.arrow_forward_ios, size: 18),
-                          onTap: () =>
-                              context.pushNamed('membershipRequestsReview'),
-                        ),
-                      ),
-                    const SizedBox(height: 10),
-                    if (access?.canManageMembers == true)
-                      Card(
-                        margin: EdgeInsets.zero,
-                        child: ListTile(
-                          leading: const CircleAvatar(
-                            backgroundColor: AppColors.primary,
-                            foregroundColor: Colors.white,
-                            child: Icon(Icons.groups),
-                          ),
-                          title: const Text(
-                            'إدارة الأعضاء',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          subtitle:
-                              const Text('البحث والتصفية وإدارة العضويات'),
-                          trailing:
-                              const Icon(Icons.arrow_forward_ios, size: 18),
-                          onTap: () => context.pushNamed('memberManagement'),
-                        ),
-                      ),
-                    if (canReviewBookings && organizationId != null) ...[
-                      const SizedBox(height: 10),
-                      Card(
-                        margin: EdgeInsets.zero,
-                        child: ListTile(
-                          leading: const CircleAvatar(
-                            backgroundColor: AppColors.primary,
-                            foregroundColor: Colors.white,
-                            child: Icon(Icons.event_note_outlined),
-                          ),
-                          title: const Text(
-                            'طلبات حجز المجلس',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          subtitle: const Text('مراجعة واعتماد طلبات الحجز'),
-                          trailing:
-                              const Icon(Icons.arrow_forward_ios, size: 18),
-                          onTap: () =>
-                              context.pushNamed('bookingRequestsReview'),
-                        ),
-                      ),
-                    ],
-                    if (canReviewReceipts && organizationId != null) ...[
-                      const SizedBox(height: 10),
-                      Card(
-                        margin: EdgeInsets.zero,
-                        child: ListTile(
-                          leading: const CircleAvatar(
-                            backgroundColor: AppColors.primary,
-                            foregroundColor: Colors.white,
-                            child: Icon(Icons.receipt_long_outlined),
-                          ),
-                          title: const Text(
-                            'مراجعة الإيصالات',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          subtitle: const Text('الإيصالات قيد الاعتماد'),
-                          trailing: pendingReceipts?.when(
-                            data: (items) => Badge(
-                              label: Text('${items.length}'),
-                              child: const Icon(Icons.arrow_forward_ios),
-                            ),
-                            loading: () => const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                            error: (_, __) =>
-                                const Icon(Icons.arrow_forward_ios),
-                          ),
-                          onTap: () => context.pushNamed('financialReview'),
-                        ),
-                      ),
-                    ],
-                    if (access?.canManageFinance == true &&
-                        organizationId != null) ...[
-                      const SizedBox(height: 10),
-                      Card(
-                        margin: EdgeInsets.zero,
-                        child: ListTile(
-                          leading: const CircleAvatar(
-                            backgroundColor: AppColors.primary,
-                            foregroundColor: Colors.white,
-                            child: Icon(Icons.account_balance_wallet_outlined),
-                          ),
-                          title: const Text(
-                            'إدارة الرسوم والاشتراكات',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          subtitle: const Text(
-                            'إعدادات الرسوم والباقات وحسابات الأعضاء',
-                          ),
-                          trailing:
-                              const Icon(Icons.arrow_forward_ios, size: 18),
-                          onTap: () => context.pushNamed('financialManagement'),
-                        ),
-                      ),
-                    ],
-                    if (access?.isSuperAdmin == true) ...[
-                      const SizedBox(height: 10),
-                      _AdminActionCard(
-                        icon: Icons.add_business_outlined,
-                        title: 'إضافة مجلس',
-                        subtitle: 'إنشاء مجلس جديد وإعداد صلاحياته',
-                        onTap: () => context.pushNamed('createOrganization'),
-                        gold: true,
-                      ),
-                      const SizedBox(height: 10),
-                      _AdminActionCard(
-                        icon: Icons.account_balance_outlined,
-                        title: 'إدارة المجالس',
-                        subtitle: 'تعديل المجالس وتفعيلها أو تعليقها',
-                        onTap: () =>
-                            context.pushNamed('organizationsManagement'),
-                        gold: true,
-                      ),
-                    ],
-                    if (access?.canManageRoles == true) ...[
-                      const SizedBox(height: 10),
-                      _AdminActionCard(
-                        icon: Icons.admin_panel_settings_outlined,
-                        title: 'إدارة الصلاحيات',
-                        subtitle: 'إدارة أدوار وصلاحيات المجلس',
-                        onTap: () => context.pushNamed('rolesManagement'),
-                        gold: access?.isSuperAdmin == true,
-                      ),
-                    ],
-                    if (access?.canReadAudit == true) ...[
-                      const SizedBox(height: 10),
-                      _AdminActionCard(
-                        icon: Icons.history,
-                        title: 'سجل الأحداث',
-                        subtitle: 'عرض سجل العمليات الحساسة (للقراءة فقط)',
-                        onTap: () => context.pushNamed('auditLogs'),
-                        gold: access?.isSuperAdmin == true,
-                      ),
-                    ],
-                    if (access?.isSuperAdmin == true) ...[
-                      const SizedBox(height: 10),
-                      _AdminActionCard(
-                        icon: Icons.settings_outlined,
-                        title: 'الإعدادات',
-                        subtitle: 'إعدادات المجلس والمنصة',
-                        onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                              content: Text('قسم الإعدادات قيد التجهيز')),
-                        ),
-                        gold: true,
-                      ),
-                      const SizedBox(height: 10),
-                      _AdminActionCard(
-                        icon: Icons.analytics_outlined,
-                        title: 'التقارير',
-                        subtitle: 'عرض لوحات المؤشرات والتقارير',
-                        onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                              content: Text('قسم التقارير قيد التجهيز')),
-                        ),
-                        gold: true,
-                      ),
-                    ],
-                    const SizedBox(height: 24),
-                  ],
-                ),
-              ),
-            ),
           ],
         ),
       ),
     );
   }
-}
 
-class _StatsCards extends StatelessWidget {
-  final Map<String, dynamic> stats;
-  const _StatsCards({required this.stats});
+  Future<void> _openCouncil(Map<String, dynamic> organization) async {
+    final l = AppLocalizations.of(context);
+    final id = organization['organizationId'] as String;
+    if (_openingId != null || organization['status'] != 'active') return;
+    setState(() => _openingId = id);
+    try {
+      await ref
+          .read(organizationContextProvider.notifier)
+          .selectOrganizationAsSuperAdmin(id);
+      if (mounted) context.pushNamed('councilDashboard');
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(l.couldNotOpenCouncil)));
+      }
+    } finally {
+      if (mounted) setState(() => _openingId = null);
+    }
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    final monthName = DateFormat('MMMM', 'ar').format(DateTime.now());
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('إحصائيات $monthName',
-            style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: AppColors.textDark)),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _StatCard(
-                label: 'المبالغ المحصلة',
-                amountBaisa: stats['totalCollectedBaisa'] as int? ?? 0,
-                icon: Icons.monetization_on,
-                color: Colors.green,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: _StatCard(
-                label: 'الأعضاء الملتزمون',
-                value: '${stats['committedCount']}/${stats['totalMembers']}',
-                icon: Icons.check_circle,
-                color: AppColors.primary,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        _StatCard(
-          label: 'الأعضاء المتأخرون هذا الشهر',
-          value: '${stats['lateCount']} عضو',
-          icon: Icons.warning_amber,
-          color: Colors.red,
-          fullWidth: true,
-        ),
-      ],
-    );
+  Future<void> _closeDrawerAndScroll(GlobalKey? key) async {
+    _scaffoldKey.currentState?.closeDrawer();
+    if (key == null) {
+      PrimaryScrollController.maybeOf(context)?.animateTo(0,
+          duration: const Duration(milliseconds: 350), curve: Curves.easeOut);
+      return;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 180));
+    if (!mounted) return;
+    final target = key.currentContext;
+    if (target != null && target.mounted) {
+      await Scrollable.ensureVisible(target,
+          duration: const Duration(milliseconds: 350), curve: Curves.easeOut);
+    }
   }
 }
 
-class _StatCard extends StatelessWidget {
-  final String label;
-  final String? value;
-  final int? amountBaisa;
-  final IconData icon;
-  final Color color;
-  final bool fullWidth;
-
-  const _StatCard({
-    required this.label,
-    this.value,
-    this.amountBaisa,
-    required this.icon,
-    required this.color,
-    this.fullWidth = false,
-  }) : assert(value != null || amountBaisa != null);
+class _SystemHeader extends StatelessWidget {
+  const _SystemHeader(
+      {required this.name, this.photoUrl, required this.onProfile});
+  final String name;
+  final String? photoUrl;
+  final VoidCallback onProfile;
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final hasPhoto = photoUrl?.trim().isNotEmpty == true;
     return Container(
-      width: fullWidth ? double.infinity : null,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withValues(alpha: 0.2)),
-        boxShadow: [
+        gradient: const LinearGradient(
+          colors: [Color(0xFF123A78), Color(0xFF246BCE)],
+          begin: AlignmentDirectional.topStart,
+          end: AlignmentDirectional.bottomEnd,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: const [
           BoxShadow(
-              color: color.withValues(alpha: 0.08),
-              blurRadius: 8,
-              offset: const Offset(0, 2))
+              color: Color(0x24123A78), blurRadius: 22, offset: Offset(0, 9)),
         ],
       ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.1),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(icon, color: color, size: 22),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const CircleAvatar(
+            radius: 27,
+            backgroundColor: Colors.white,
+            child: Icon(Icons.public, color: Color(0xFF1769E0), size: 29),
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style:
-                        TextStyle(color: Colors.grey.shade600, fontSize: 12)),
-                const SizedBox(height: 4),
-                if (amountBaisa != null)
-                  OmrAmount(
-                    amountBaisa: amountBaisa!,
-                    style: TextStyle(
-                      color: color,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  )
-                else
-                  Text(value!,
-                      style: TextStyle(
-                          color: color,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16)),
-              ],
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(l.systemAdministration,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 21,
+                      fontWeight: FontWeight.bold)),
+              Text(l.systemAdministrationDescription,
+                  style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            ]),
+          ),
+        ]),
+        const SizedBox(height: 18),
+        Material(
+          color: Colors.white.withValues(alpha: .12),
+          borderRadius: BorderRadius.circular(16),
+          child: InkWell(
+            onTap: onProfile,
+            borderRadius: BorderRadius.circular(16),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(children: [
+                CircleAvatar(
+                  radius: 21,
+                  foregroundImage:
+                      hasPhoto ? NetworkImage(photoUrl!.trim()) : null,
+                  child: hasPhoto ? null : const Icon(Icons.person_outline),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold)),
+                        Text(l.systemOwner,
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 12)),
+                      ]),
+                ),
+                const Icon(Icons.chevron_right, color: Colors.white70),
+              ]),
             ),
           ),
-        ],
-      ),
+        ),
+      ]),
     );
   }
 }
 
-class _PendingCard extends StatelessWidget {
-  final TransactionModel tx;
-  const _PendingCard({required this.tx});
-
+class _SystemSummary extends StatelessWidget {
+  const _SystemSummary({required this.state});
+  final AsyncValue<SystemDashboardSummary> state;
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      elevation: 2,
-      shadowColor: Colors.black12,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(14),
-        onTap: () => context.pushNamed(
-          'adminReview',
-          pathParameters: {'id': tx.id},
-          queryParameters: {
-            if (tx.organizationId.isNotEmpty)
-              'organizationId': tx.organizationId,
-          },
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: Colors.orange.withValues(alpha: 0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.receipt_long,
-                    color: Colors.orange, size: 24),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(tx.memberName,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.bold, fontSize: 15)),
-                    const SizedBox(height: 4),
-                    Text(
-                      'تاريخ الإرسال: ${DateFormat('yyyy/MM/dd - HH:mm').format(tx.submittedAt)}',
-                      style:
-                          TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: AppColors.primary,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: const Text('مراجعة',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12)),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    final l = AppLocalizations.of(context);
+    final value = state.valueOrNull;
+    final cards = [
+      _Stat(
+          l.totalCouncils,
+          state.isLoading ? null : '${value?.totalCouncils ?? '—'}',
+          Icons.account_balance_outlined,
+          const Color(0xFF1769E0)),
+      _Stat(
+          l.activeCouncils,
+          state.isLoading ? null : '${value?.activeCouncils ?? '—'}',
+          Icons.verified_outlined,
+          const Color(0xFF0A8F63)),
+      _Stat(
+          l.pendingActions,
+          state.isLoading ? null : '${value?.pendingActions ?? '—'}',
+          Icons.pending_actions_outlined,
+          const Color(0xFFE06B17)),
+    ];
+    return LayoutBuilder(builder: (_, constraints) {
+      final width = (constraints.maxWidth - 12) / 2;
+      return Wrap(spacing: 12, runSpacing: 12, children: [
+        for (final card in cards)
+          SizedBox(width: width, child: _StatCard(data: card)),
+      ]);
+    });
   }
 }
 
-class _EmptyPending extends StatelessWidget {
+class _Stat {
+  const _Stat(this.title, this.value, this.icon, this.color);
+  final String title;
+  final String? value;
+  final IconData icon;
+  final Color color;
+}
+
+class _StatCard extends StatelessWidget {
+  const _StatCard({required this.data});
+  final _Stat data;
+  @override
+  Widget build(BuildContext context) => Container(
+        height: 138,
+        padding: const EdgeInsets.all(14),
+        decoration: _cardDecoration(),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          CircleAvatar(
+              backgroundColor: data.color.withValues(alpha: .1),
+              child: Icon(data.icon, color: data.color)),
+          const Spacer(),
+          if (data.value == null)
+            const SizedBox.square(
+                dimension: 22, child: CircularProgressIndicator(strokeWidth: 2))
+          else
+            Text(data.value!,
+                style:
+                    const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+          Text(data.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF667085))),
+        ]),
+      );
+}
+
+class _QuickActions extends StatelessWidget {
+  const _QuickActions({required this.onCreate, required this.onManage});
+  final VoidCallback onCreate;
+  final VoidCallback onManage;
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(40),
-        child: Column(
-          children: [
-            Icon(Icons.inbox, size: 64, color: Colors.grey.shade300),
-            const SizedBox(height: 16),
-            const Text('لا توجد طلبات قيد المراجعة',
-                style: TextStyle(color: Colors.grey, fontSize: 15)),
-          ],
-        ),
-      ),
-    );
+    final l = AppLocalizations.of(context);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      _Heading(title: l.quickActions, icon: Icons.bolt_outlined),
+      const SizedBox(height: 10),
+      Row(children: [
+        Expanded(
+            child: _Action(Icons.add_business_outlined, l.createCouncil,
+                const Color(0xFF0A8F63), onCreate)),
+        const SizedBox(width: 12),
+        Expanded(
+            child: _Action(Icons.account_balance_outlined, l.manageCouncils,
+                const Color(0xFF1769E0), onManage)),
+      ]),
+    ]);
   }
 }
 
-String _organizationName(Map<String, dynamic>? organization) {
-  final name = organization?['officialNameArabic'];
-  if (name is String && name.trim().isNotEmpty) return name;
-  return OrganizationModel.production.officialNameArabic;
-}
-
-class _StatsShimmer extends StatelessWidget {
-  const _StatsShimmer();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-        child: CircularProgressIndicator(color: AppColors.primary));
-  }
-}
-
-class _AdminActionCard extends StatelessWidget {
-  const _AdminActionCard({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-    this.gold = false,
-  });
-
+class _Action extends StatelessWidget {
+  const _Action(this.icon, this.title, this.color, this.onTap);
   final IconData icon;
   final String title;
-  final String subtitle;
+  final Color color;
   final VoidCallback onTap;
-  final bool gold;
+  @override
+  Widget build(BuildContext context) => Material(
+        color: color.withValues(alpha: .08),
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(18),
+          child: SizedBox(
+            height: 108,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(icon, color: color, size: 29),
+                    const SizedBox(height: 9),
+                    Text(title,
+                        textAlign: TextAlign.center,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.bold)),
+                  ]),
+            ),
+          ),
+        ),
+      );
+}
 
+class _SystemAlerts extends StatelessWidget {
+  const _SystemAlerts({required this.state});
+  final AsyncValue<SystemDashboardSummary> state;
   @override
   Widget build(BuildContext context) {
-    final color = gold ? Colors.amber.shade800 : AppColors.primary;
-    return Card(
-      margin: EdgeInsets.zero,
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: color,
-          foregroundColor: Colors.white,
-          child: Icon(icon),
-        ),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text(subtitle),
-        trailing: const Icon(Icons.arrow_forward_ios, size: 18),
-        onTap: onTap,
-      ),
+    final l = AppLocalizations.of(context);
+    final pending = state.valueOrNull?.pendingActions;
+    final child = state.isLoading
+        ? const Center(child: CircularProgressIndicator())
+        : state.hasError || pending == null
+            ? _Inline(Icons.cloud_off_outlined, l.couldNotLoad)
+            : pending == 0
+                ? _Inline(Icons.check_circle_outline, l.noSystemAlerts)
+                : Row(children: [
+                    const Icon(Icons.pending_actions_outlined,
+                        color: Colors.orange),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(l.pendingActionsAlert)),
+                    Badge(label: Text('$pending')),
+                  ]);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: _cardDecoration(),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _Heading(
+            title: l.systemAlerts, icon: Icons.notification_important_outlined),
+        const SizedBox(height: 12),
+        child,
+      ]),
     );
   }
 }
+
+class _CouncilCard extends StatelessWidget {
+  const _CouncilCard({
+    required this.organization,
+    required this.language,
+    required this.counts,
+    required this.opening,
+    required this.onOpen,
+    required this.onManage,
+  });
+  final Map<String, dynamic> organization;
+  final String language;
+  final Map<String, int>? counts;
+  final bool opening;
+  final VoidCallback onOpen;
+  final VoidCallback onManage;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    final status = organization['status'] as String? ?? 'inactive';
+    final active = status == 'active';
+    final logo = organization['logoUrl'] as String?;
+    final created = organization['createdAt'];
+    final date = created is Timestamp
+        ? DateFormat.yMd(language).format(created.toDate())
+        : null;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: _cardDecoration(),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          CircleAvatar(
+            radius: 25,
+            backgroundColor: const Color(0xFFEAF3FF),
+            foregroundImage:
+                logo?.isNotEmpty == true ? NetworkImage(logo!) : null,
+            child: logo?.isNotEmpty == true
+                ? null
+                : const Icon(Icons.account_balance_outlined,
+                    color: Color(0xFF1769E0)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(_organizationName(organization, language),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 17, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 5),
+              _Status(label: _statusLabel(status, l), active: active),
+            ]),
+          ),
+        ]),
+        const SizedBox(height: 14),
+        Wrap(spacing: 14, runSpacing: 8, children: [
+          _Meta(
+              Icons.groups_outlined,
+              counts == null
+                  ? '${l.members}: —'
+                  : '${l.members}: ${counts!['members'] ?? 0}'),
+          if (date != null)
+            _Meta(Icons.calendar_today_outlined, '${l.createdOn}: $date'),
+        ]),
+        const SizedBox(height: 14),
+        Row(children: [
+          Expanded(
+            child: FilledButton.icon(
+              onPressed: active && !opening ? onOpen : null,
+              icon: opening
+                  ? const SizedBox.square(
+                      dimension: 17,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.open_in_new, size: 18),
+              label: Text(l.openCouncil),
+            ),
+          ),
+          const SizedBox(width: 10),
+          OutlinedButton.icon(
+            onPressed: onManage,
+            icon: const Icon(Icons.settings_outlined, size: 18),
+            label: Text(l.manage),
+          ),
+        ]),
+      ]),
+    );
+  }
+}
+
+class _Status extends StatelessWidget {
+  const _Status({required this.label, required this.active});
+  final String label;
+  final bool active;
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        decoration: BoxDecoration(
+          color: active ? const Color(0xFFE7F8F2) : const Color(0xFFFFF0E8),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(label,
+            style: TextStyle(
+                color:
+                    active ? const Color(0xFF087A55) : const Color(0xFFC45117),
+                fontSize: 11,
+                fontWeight: FontWeight.bold)),
+      );
+}
+
+class _Meta extends StatelessWidget {
+  const _Meta(this.icon, this.text);
+  final IconData icon;
+  final String text;
+  @override
+  Widget build(BuildContext context) =>
+      Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 17, color: const Color(0xFF667085)),
+        const SizedBox(width: 5),
+        Text(text,
+            style: const TextStyle(fontSize: 12, color: Color(0xFF667085))),
+      ]);
+}
+
+class _Heading extends StatelessWidget {
+  const _Heading({required this.title, required this.icon, this.subtitle});
+  final String title;
+  final String? subtitle;
+  final IconData icon;
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        CircleAvatar(
+          backgroundColor: const Color(0xFFEAF3FF),
+          child: Icon(icon, color: const Color(0xFF1769E0)),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(title,
+                style:
+                    const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            if (subtitle != null)
+              Text(subtitle!,
+                  style:
+                      const TextStyle(fontSize: 12, color: Color(0xFF667085))),
+          ]),
+        ),
+      ]);
+}
+
+class _Message extends StatelessWidget {
+  const _Message(
+      {required this.icon, required this.text, this.action, this.onTap});
+  final IconData icon;
+  final String text;
+  final String? action;
+  final VoidCallback? onTap;
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(24),
+        decoration: _cardDecoration(),
+        child: Column(children: [
+          Icon(icon, size: 38, color: const Color(0xFF98A2B3)),
+          const SizedBox(height: 10),
+          Text(text, textAlign: TextAlign.center),
+          if (onTap != null && action != null) ...[
+            const SizedBox(height: 10),
+            TextButton(onPressed: onTap, child: Text(action!)),
+          ],
+        ]),
+      );
+}
+
+class _Inline extends StatelessWidget {
+  const _Inline(this.icon, this.text);
+  final IconData icon;
+  final String text;
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        Icon(icon, color: const Color(0xFF98A2B3)),
+        const SizedBox(width: 8),
+        Expanded(
+            child:
+                Text(text, style: const TextStyle(color: Color(0xFF667085)))),
+      ]);
+}
+
+class _SystemDrawer extends StatelessWidget {
+  const _SystemDrawer({required this.onHome, required this.onCouncils});
+  final VoidCallback onHome;
+  final VoidCallback onCouncils;
+  @override
+  Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context);
+    return NavigationDrawer(children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(20, 30, 20, 20),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const CircleAvatar(
+            radius: 28,
+            backgroundColor: Color(0xFFEAF3FF),
+            child: Icon(Icons.public, color: Color(0xFF1769E0), size: 30),
+          ),
+          const SizedBox(height: 12),
+          Text(l.systemAdministration,
+              style:
+                  const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          Text(l.systemOwner,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF667085))),
+        ]),
+      ),
+      const Divider(),
+      ListTile(
+          leading: const Icon(Icons.home_outlined),
+          title: Text(l.systemHome),
+          onTap: onHome),
+      ListTile(
+          leading: const Icon(Icons.account_balance_outlined),
+          title: Text(l.manageCouncils),
+          onTap: onCouncils),
+    ]);
+  }
+}
+
+BoxDecoration _cardDecoration() => BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: const Color(0xFFE6EBF2)),
+      boxShadow: const [
+        BoxShadow(
+            color: Color(0x0A000000), blurRadius: 10, offset: Offset(0, 3)),
+      ],
+    );
+
+String _organizationName(Map<String, dynamic> organization, String locale) {
+  final preferred = locale == 'en'
+      ? organization['officialNameEnglish']
+      : organization['officialNameArabic'];
+  if (preferred is String && preferred.trim().isNotEmpty) return preferred;
+  final fallback = locale == 'en'
+      ? organization['officialNameArabic']
+      : organization['officialNameEnglish'];
+  if (fallback is String && fallback.trim().isNotEmpty) return fallback;
+  return organization['shortName'] as String? ??
+      organization['organizationId'] as String? ??
+      '-';
+}
+
+String _searchText(Map<String, dynamic> organization) => [
+      organization['officialNameArabic'],
+      organization['officialNameEnglish'],
+      organization['shortName'],
+    ].whereType<String>().join(' ').toLowerCase();
+
+String _statusLabel(String status, AppLocalizations l) => switch (status) {
+      'active' => l.active,
+      'archived' => l.archived,
+      'suspended' => l.suspended,
+      _ => l.inactive,
+    };

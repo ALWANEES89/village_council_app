@@ -4,8 +4,9 @@ import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/member_model.dart';
+import '../../../data/models/membership_model.dart';
 import '../../../data/models/user_profile_model.dart';
-import '../../../data/services/organization_seed_service.dart';
+import '../../../l10n/generated/app_localizations.dart';
 import '../../../providers/app_providers.dart';
 import '../data/membership_request_model.dart';
 import '../providers/membership_request_providers.dart';
@@ -32,14 +33,14 @@ class _JoinRequestScreenState extends ConsumerState<JoinRequestScreen> {
   final _emailController = TextEditingController();
   final _addressController = TextEditingController();
   final _reasonController = TextEditingController();
+  final _searchController = TextEditingController();
 
   String? _organizationId;
   bool _didPrefill = false;
   bool _isResolvingQr = false;
   String? _qrError;
   Map<String, dynamic>? _qrOrganization;
-  bool _isSeedingOrganizations = false;
-  bool _organizationSeedFailed = false;
+  bool _isPickingOrganization = false;
 
   bool get _isQrFlow =>
       widget.organizationId?.trim().isNotEmpty == true ||
@@ -121,6 +122,7 @@ class _JoinRequestScreenState extends ConsumerState<JoinRequestScreen> {
     _emailController.dispose();
     _addressController.dispose();
     _reasonController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -134,26 +136,11 @@ class _JoinRequestScreenState extends ConsumerState<JoinRequestScreen> {
     _addressController.text = profile?.address ?? '';
   }
 
-  Future<void> _seedOrganizations() async {
-    if (_isSeedingOrganizations) return;
-    setState(() {
-      _isSeedingOrganizations = true;
-      _organizationSeedFailed = false;
-    });
-    try {
-      await OrganizationSeedService.instance.ensureSeeded();
-      ref.invalidate(organizationsProvider);
-    } catch (_) {
-      if (mounted) setState(() => _organizationSeedFailed = true);
-    } finally {
-      if (mounted) setState(() => _isSeedingOrganizations = false);
-    }
-  }
-
   Future<void> _submit(MemberModel member) async {
-    if (!_formKey.currentState!.validate()) return;
+    if (ref.read(membershipRequestSubmissionProvider).isSubmitting) return;
+    if (_formKey.currentState?.validate() != true) return;
     final organizationId = _organizationId;
-    if (organizationId == null) return;
+    if (organizationId == null || organizationId.trim().isEmpty) return;
 
     final request = MembershipRequestModel(
       requestId: member.userId,
@@ -178,99 +165,370 @@ class _JoinRequestScreenState extends ConsumerState<JoinRequestScreen> {
     if (!mounted) return;
 
     if (submitted) {
+      final strings = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('تم إرسال طلب الانضمام بنجاح')),
+        SnackBar(content: Text(strings.joinRequestSent)),
       );
-      context.pop();
+      ref.read(membershipRequestSubmissionProvider.notifier).reset();
+    }
+  }
+
+  Future<void> _submitForOrganization(
+    MemberModel member,
+    String organizationId,
+  ) async {
+    if (organizationId.trim().isEmpty) return;
+    setState(() => _organizationId = organizationId);
+    await _submit(member);
+  }
+
+  Future<Map<String, dynamic>?> _pickOrganization(
+    List<Map<String, dynamic>> organizations,
+  ) async {
+    if (_isPickingOrganization) return null;
+    _isPickingOrganization = true;
+    final searchController = TextEditingController();
+    var query = '';
+    var isClosing = false;
+    try {
+      final selected = await showModalBottomSheet<Map<String, dynamic>>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) => StatefulBuilder(
+          builder: (context, setModalState) {
+            final normalizedQuery = _normalizeSearchText(query);
+            final filtered = normalizedQuery.isEmpty
+                ? organizations
+                : organizations.where((organization) {
+                    final haystack = _normalizeSearchText(
+                      '${_organizationName(organization)} '
+                      '${_organizationDescription(organization)}',
+                    );
+                    return haystack.contains(normalizedQuery);
+                  }).toList();
+            return DraggableScrollableSheet(
+              initialChildSize: 0.72,
+              minChildSize: 0.48,
+              maxChildSize: 0.92,
+              expand: false,
+              builder: (context, scrollController) => Material(
+                color: AppColors.background,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(24),
+                ),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 10),
+                    Container(
+                      width: 42,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade300,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(20, 16, 20, 12),
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: Text(
+                          'اختر المجلس',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: TextField(
+                        controller: searchController,
+                        autofocus: true,
+                        textInputAction: TextInputAction.search,
+                        decoration: InputDecoration(
+                          hintText: 'ابحث باسم المجلس',
+                          prefixIcon: const Icon(Icons.search),
+                          suffixIcon: query.isEmpty
+                              ? null
+                              : IconButton(
+                                  tooltip: 'مسح البحث',
+                                  onPressed: () {
+                                    searchController.clear();
+                                    setModalState(() => query = '');
+                                  },
+                                  icon: const Icon(Icons.close),
+                                ),
+                        ),
+                        onChanged: (value) =>
+                            setModalState(() => query = value),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Expanded(
+                      child: filtered.isEmpty
+                          ? const Center(
+                              child: Text('لا يوجد مجلس مطابق لبحثك'),
+                            )
+                          : ListView.separated(
+                              controller: scrollController,
+                              padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                              itemCount: filtered.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 8),
+                              itemBuilder: (context, index) {
+                                final organization = filtered[index];
+                                final organizationId =
+                                    organization['organizationId'] as String?;
+                                final isSelected =
+                                    organizationId == _organizationId;
+                                return Card(
+                                  elevation: 0,
+                                  margin: EdgeInsets.zero,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                    side: BorderSide(
+                                      color: isSelected
+                                          ? AppColors.primary
+                                          : Colors.grey.shade300,
+                                      width: isSelected ? 2 : 1,
+                                    ),
+                                  ),
+                                  child: ListTile(
+                                    onTap: () {
+                                      if (isClosing) return;
+                                      isClosing = true;
+                                      FocusScope.of(context).unfocus();
+                                      WidgetsBinding.instance
+                                          .addPostFrameCallback(
+                                        (_) {
+                                          if (context.mounted) {
+                                            Navigator.of(context)
+                                                .pop(organization);
+                                          }
+                                        },
+                                      );
+                                    },
+                                    contentPadding: const EdgeInsets.all(10),
+                                    title: _OrganizationChoiceContent(
+                                      organization: organization,
+                                    ),
+                                    trailing: Icon(
+                                      isSelected
+                                          ? Icons.check_circle
+                                          : Icons.chevron_left,
+                                      color: isSelected
+                                          ? AppColors.primary
+                                          : Colors.grey,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      );
+      return selected;
+    } finally {
+      searchController.dispose();
+      _isPickingOrganization = false;
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final strings = AppLocalizations.of(context);
     final memberAsync = ref.watch(currentMemberProvider);
     final userId = ref.watch(authStateProvider).value?.uid;
     final profileAsync =
         userId == null ? null : ref.watch(userProfileProvider(userId));
     final submission = ref.watch(membershipRequestSubmissionProvider);
 
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: AppColors.background,
-        appBar: AppBar(
-          title: const Text('طلب الانضمام'),
-          centerTitle: true,
-          backgroundColor: AppColors.primaryDark,
-          foregroundColor: Colors.white,
-        ),
-        body: memberAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (_, __) => const _ScreenMessage(
-            message: 'تعذر تحميل بيانات حسابك. حاول مرة أخرى.',
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: Text(strings.findAndJoinCouncil),
+        actions: [
+          IconButton(
+            tooltip: strings.myAccount,
+            onPressed: () => context.pushNamed('myAccount'),
+            icon: const Icon(Icons.account_circle_outlined),
           ),
-          data: (member) {
-            if (member == null) {
-              return const _ScreenMessage(
-                message: 'تعذر العثور على بيانات المستخدم',
-              );
-            }
-            if (profileAsync?.isLoading == true) {
+        ],
+        centerTitle: true,
+        backgroundColor: AppColors.primaryDark,
+        foregroundColor: Colors.white,
+      ),
+      body: memberAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (_, __) => _ScreenMessage(message: strings.couldNotLoadAccount),
+        data: (member) {
+          if (member == null || userId == null) {
+            return _ScreenMessage(message: strings.couldNotFindUser);
+          }
+          if (profileAsync?.isLoading == true) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (profileAsync?.hasError == true) {
+            return _ScreenMessage(message: strings.couldNotLoadProfile);
+          }
+          _prefill(member, profileAsync?.asData?.value);
+          if (_isQrFlow) {
+            if (_isResolvingQr) {
               return const Center(child: CircularProgressIndicator());
             }
-            if (profileAsync?.hasError == true) {
-              return const _ScreenMessage(
-                message: 'تعذر تحميل الملف الشخصي. حاول مرة أخرى.',
-              );
+            if (_qrError != null || _qrOrganization == null) {
+              return _InvalidQrMessage(message: strings.invalidJoinCode);
             }
-            _prefill(member, profileAsync?.asData?.value);
-            if (_isQrFlow) {
-              if (_isResolvingQr) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (_qrError != null || _qrOrganization == null) {
-                return _InvalidQrMessage(
-                  message: _qrError ?? 'رمز الانضمام غير صالح أو منتهي',
-                );
-              }
-              return _buildForm(
-                member: member,
-                organizations: [_qrOrganization!],
-                submission: submission,
-                organizationLocked: true,
-              );
-            }
-
-            final organizationsAsync = ref.watch(organizationsProvider);
-            return organizationsAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (_, __) => _OrganizationLoadState(
-                message: 'تعذر تحميل المجالس المتاحة',
-                onRetry: _seedOrganizations,
-              ),
-              data: (organizations) {
-                if (organizations.isEmpty) {
-                  if (!_isSeedingOrganizations && !_organizationSeedFailed) {
-                    WidgetsBinding.instance.addPostFrameCallback(
-                      (_) => _seedOrganizations(),
-                    );
-                  }
-                  return _OrganizationLoadState(
-                    message: _organizationSeedFailed
-                        ? 'تعذر تجهيز بيانات المجلس. حاول مرة أخرى.'
-                        : 'جاري تجهيز بيانات المجلس...',
-                    loading: _isSeedingOrganizations,
-                    onRetry: _seedOrganizations,
-                  );
-                }
-                return _buildForm(
-                  member: member,
-                  organizations: organizations,
-                  submission: submission,
-                );
-              },
+            return _buildForm(
+              member: member,
+              organizations: [_qrOrganization!],
+              submission: submission,
+              organizationLocked: true,
             );
-          },
-        ),
+          }
+
+          final organizationsAsync = ref.watch(organizationsProvider);
+          final requestsAsync =
+              ref.watch(userMembershipRequestsProvider(userId));
+          final membershipsAsync =
+              ref.watch(activeUserMembershipsProvider(userId));
+          if (requestsAsync.isLoading || membershipsAsync.isLoading) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (requestsAsync.hasError) {
+            return _OrganizationLoadState(
+              message: strings.couldNotLoadJoinRequests,
+              onRetry: () =>
+                  ref.invalidate(userMembershipRequestsProvider(userId)),
+              retryLabel: strings.retry,
+            );
+          }
+          if (membershipsAsync.hasError ||
+              membershipsAsync.valueOrNull?.loadFailed == true) {
+            return _OrganizationLoadState(
+              message: strings.couldNotLoadAccount,
+              onRetry: () =>
+                  ref.invalidate(activeUserMembershipsProvider(userId)),
+              retryLabel: strings.retry,
+            );
+          }
+          return organizationsAsync.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (_, __) => _OrganizationLoadState(
+              message: strings.couldNotLoadCouncils,
+              onRetry: () => ref.invalidate(organizationsProvider),
+              retryLabel: strings.retry,
+            ),
+            data: (organizations) => _buildCouncilDiscovery(
+              member: member,
+              organizations: organizations,
+              requests: requestsAsync.valueOrNull ?? const [],
+              activeMemberships:
+                  membershipsAsync.valueOrNull?.memberships ?? const [],
+              submission: submission,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildCouncilDiscovery({
+    required MemberModel member,
+    required List<Map<String, dynamic>> organizations,
+    required List<MembershipRequestModel> requests,
+    required List<MembershipModel> activeMemberships,
+    required MembershipRequestSubmissionState submission,
+  }) {
+    final strings = AppLocalizations.of(context);
+    final filtered = organizations
+        .where((organization) => organizationMatchesJoinQuery(
+              organization,
+              _searchController.text,
+            ))
+        .toList(growable: false);
+    final requestsByOrganization = <String, MembershipRequestModel>{
+      for (final request in requests) request.organizationId: request,
+    };
+    final joinedOrganizations = activeMemberships
+        .where((membership) => membership.status == MembershipStatus.active)
+        .map((membership) => membership.organizationId)
+        .toSet();
+
+    return Form(
+      key: _formKey,
+      child: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          Text(
+            strings.findAndJoinCouncil,
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.primaryDark,
+                ),
+          ),
+          const SizedBox(height: 6),
+          Text(strings.findCouncilDescription),
+          const SizedBox(height: 18),
+          TextField(
+            key: const Key('joinCouncilSearchField'),
+            controller: _searchController,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              hintText: strings.searchByCouncilName,
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: _searchController.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: strings.close,
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() {});
+                      },
+                      icon: const Icon(Icons.close),
+                    ),
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 16),
+          if (organizations.isEmpty)
+            _InlineEmptyState(message: strings.noCouncilsAvailableToJoin)
+          else if (filtered.isEmpty)
+            _InlineEmptyState(message: strings.noMatchingCouncils)
+          else
+            for (final organization in filtered) ...[
+              _CouncilJoinCard(
+                organization: organization,
+                request: requestsByOrganization[
+                    organization['organizationId'] as String?],
+                alreadyJoined: joinedOrganizations
+                    .contains(organization['organizationId'] as String?),
+                isSubmitting: submission.isSubmitting &&
+                    _organizationId == organization['organizationId'],
+                onJoin: () => _submitForOrganization(
+                  member,
+                  organization['organizationId'] as String? ?? '',
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+          if (submission.failure != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              _submissionFailureText(strings, submission.failure!),
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: AppColors.error),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -281,6 +539,7 @@ class _JoinRequestScreenState extends ConsumerState<JoinRequestScreen> {
     required MembershipRequestSubmissionState submission,
     bool organizationLocked = false,
   }) {
+    final strings = AppLocalizations.of(context);
     return Form(
       key: _formKey,
       child: ListView(
@@ -318,43 +577,67 @@ class _JoinRequestScreenState extends ConsumerState<JoinRequestScreen> {
               initialValue: _organizationId,
               validator: (value) =>
                   value == null ? 'اختر المجلس الذي تريد الانضمام إليه' : null,
-              builder: (field) => Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'اختر المجلس',
-                    style: TextStyle(fontWeight: FontWeight.bold),
+              builder: (field) {
+                final selected =
+                    organizations.cast<Map<String, dynamic>?>().firstWhere(
+                          (organization) =>
+                              organization?['organizationId'] == field.value,
+                          orElse: () => null,
+                        );
+                return InkWell(
+                  onTap: submission.isSubmitting || _isPickingOrganization
+                      ? null
+                      : () async {
+                          final organization =
+                              await _pickOrganization(organizations);
+                          if (organization == null || !mounted) return;
+                          final value =
+                              organization['organizationId'] as String?;
+                          if (value == null || value.trim().isEmpty) return;
+                          setState(() => _organizationId = value);
+                          field.didChange(value);
+                        },
+                  borderRadius: BorderRadius.circular(12),
+                  child: InputDecorator(
+                    decoration: InputDecoration(
+                      labelText: 'اختر المجلس',
+                      prefixIcon: const Icon(Icons.search),
+                      errorText: field.errorText,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            selected == null
+                                ? 'اضغط للبحث واختيار المجلس'
+                                : _organizationName(selected),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: selected == null
+                                  ? Colors.grey.shade600
+                                  : Theme.of(context)
+                                      .textTheme
+                                      .bodyLarge
+                                      ?.color,
+                              fontWeight: selected == null
+                                  ? FontWeight.normal
+                                  : FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.arrow_drop_down),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 10),
-                  for (final organization in organizations)
-                    _OrganizationChoiceCard(
-                      organization: organization,
-                      selected: field.value ==
-                          organization['organizationId'] as String,
-                      enabled: !submission.isSubmitting,
-                      onTap: () {
-                        final value = organization['organizationId'] as String;
-                        setState(() => _organizationId = value);
-                        field.didChange(value);
-                      },
-                    ),
-                  if (field.hasError) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      field.errorText!,
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
+                );
+              },
             ),
-          if (submission.error != null) ...[
+          if (submission.failure != null) ...[
             const SizedBox(height: 16),
             Text(
-              submission.error!,
+              _submissionFailureText(strings, submission.failure!),
               textAlign: TextAlign.center,
               style: const TextStyle(color: Colors.red),
             ),
@@ -464,12 +747,12 @@ class _OrganizationLoadState extends StatelessWidget {
   const _OrganizationLoadState({
     required this.message,
     required this.onRetry,
-    this.loading = false,
+    required this.retryLabel,
   });
 
   final String message;
   final VoidCallback onRetry;
-  final bool loading;
+  final String retryLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -479,23 +762,18 @@ class _OrganizationLoadState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (loading)
-              const CircularProgressIndicator()
-            else
-              const Icon(
-                Icons.account_balance_outlined,
-                size: 56,
-                color: AppColors.primary,
-              ),
+            const Icon(
+              Icons.account_balance_outlined,
+              size: 56,
+              color: AppColors.primary,
+            ),
             const SizedBox(height: 16),
             Text(message, textAlign: TextAlign.center),
-            if (!loading) ...[
-              const SizedBox(height: 14),
-              OutlinedButton(
-                onPressed: onRetry,
-                child: const Text('إعادة المحاولة'),
-              ),
-            ],
+            const SizedBox(height: 14),
+            OutlinedButton(
+              onPressed: onRetry,
+              child: Text(retryLabel),
+            ),
           ],
         ),
       ),
@@ -503,55 +781,141 @@ class _OrganizationLoadState extends StatelessWidget {
   }
 }
 
-class _OrganizationChoiceCard extends StatelessWidget {
-  const _OrganizationChoiceCard({
+class _InlineEmptyState extends StatelessWidget {
+  const _InlineEmptyState({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 48),
+        child: Column(
+          children: [
+            const Icon(
+              Icons.account_balance_outlined,
+              size: 54,
+              color: AppColors.primary,
+            ),
+            const SizedBox(height: 14),
+            Text(message, textAlign: TextAlign.center),
+          ],
+        ),
+      );
+}
+
+class _CouncilJoinCard extends StatelessWidget {
+  const _CouncilJoinCard({
     required this.organization,
-    required this.selected,
-    required this.enabled,
-    required this.onTap,
+    required this.request,
+    required this.alreadyJoined,
+    required this.isSubmitting,
+    required this.onJoin,
   });
 
   final Map<String, dynamic> organization;
-  final bool selected;
-  final bool enabled;
-  final VoidCallback onTap;
+  final MembershipRequestModel? request;
+  final bool alreadyJoined;
+  final bool isSubmitting;
+  final VoidCallback onJoin;
 
   @override
   Widget build(BuildContext context) {
+    final strings = AppLocalizations.of(context);
+    final organizationId = organization['organizationId'] as String? ?? '';
+    final status = alreadyJoined
+        ? _JoinActionStatus.joined
+        : switch (request?.status) {
+            MembershipRequestStatus.pending => _JoinActionStatus.pending,
+            MembershipRequestStatus.approved => _JoinActionStatus.approved,
+            MembershipRequestStatus.rejected => _JoinActionStatus.rejected,
+            _ => _JoinActionStatus.available,
+          };
+    final shortName = organization['shortName'];
+    final shortNameText = shortName is String ? shortName.trim() : '';
+    final displayedName = _organizationNameForLocale(
+      organization,
+      Localizations.localeOf(context).languageCode,
+    );
+
     return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      elevation: selected ? 2 : 0,
+      elevation: 0,
+      margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: BorderSide(
-          color: selected ? AppColors.primary : Colors.grey.shade300,
-          width: selected ? 2 : 1,
-        ),
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: Colors.grey.shade300),
       ),
-      child: InkWell(
-        onTap: enabled ? onTap : null,
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            children: [
-              Expanded(
-                child: _OrganizationChoiceContent(
-                  organization: organization,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Icon(
-                selected ? Icons.radio_button_checked : Icons.radio_button_off,
-                color: selected ? AppColors.primary : Colors.grey,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _OrganizationChoiceContent(organization: organization),
+            if (shortNameText.isNotEmpty && shortNameText != displayedName) ...[
+              const SizedBox(height: 8),
+              Text(
+                shortNameText,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
               ),
             ],
-          ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              key: Key('joinCouncilAction_$organizationId'),
+              onPressed: status == _JoinActionStatus.available && !isSubmitting
+                  ? onJoin
+                  : null,
+              icon: isSubmitting
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(_joinActionIcon(status)),
+              label: Text(_joinActionLabel(strings, status)),
+            ),
+          ],
         ),
       ),
     );
   }
 }
+
+enum _JoinActionStatus { available, pending, approved, rejected, joined }
+
+IconData _joinActionIcon(_JoinActionStatus status) => switch (status) {
+      _JoinActionStatus.available => Icons.person_add_alt_1_outlined,
+      _JoinActionStatus.pending => Icons.schedule_outlined,
+      _JoinActionStatus.approved ||
+      _JoinActionStatus.joined =>
+        Icons.check_circle_outline,
+      _JoinActionStatus.rejected => Icons.cancel_outlined,
+    };
+
+String _joinActionLabel(
+  AppLocalizations strings,
+  _JoinActionStatus status,
+) =>
+    switch (status) {
+      _JoinActionStatus.available => strings.requestToJoin,
+      _JoinActionStatus.pending => strings.joinRequestPending,
+      _JoinActionStatus.approved => strings.joinRequestApproved,
+      _JoinActionStatus.rejected => strings.joinRequestRejected,
+      _JoinActionStatus.joined => strings.alreadyJoined,
+    };
+
+String _submissionFailureText(
+  AppLocalizations strings,
+  MembershipRequestSubmissionFailure failure,
+) =>
+    switch (failure) {
+      MembershipRequestSubmissionFailure.duplicatePending =>
+        strings.joinRequestAlreadyPending,
+      MembershipRequestSubmissionFailure.activeMembership =>
+        strings.activeMembershipAlreadyExists,
+      MembershipRequestSubmissionFailure.unavailable =>
+        strings.couldNotSendJoinRequest,
+    };
 
 class _OrganizationChoiceContent extends StatelessWidget {
   const _OrganizationChoiceContent({required this.organization});
@@ -592,7 +956,10 @@ class _OrganizationChoiceContent extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                _organizationName(organization),
+                _organizationNameForLocale(
+                  organization,
+                  Localizations.localeOf(context).languageCode,
+                ),
                 style: const TextStyle(fontWeight: FontWeight.bold),
               ),
               if (description.isNotEmpty) ...[
@@ -610,6 +977,28 @@ class _OrganizationChoiceContent extends StatelessWidget {
       ],
     );
   }
+}
+
+String _normalizeSearchText(String value) => value
+    .trim()
+    .toLowerCase()
+    .replaceAll(RegExp(r'[\u064B-\u065F\u0670]'), '')
+    .replaceAll(RegExp('[أإآ]'), 'ا')
+    .replaceAll('ى', 'ي')
+    .replaceAll('ة', 'ه');
+
+bool organizationMatchesJoinQuery(
+  Map<String, dynamic> organization,
+  String query,
+) {
+  final normalizedQuery = _normalizeSearchText(query);
+  if (normalizedQuery.isEmpty) return true;
+  final searchable = [
+    organization['officialNameArabic'],
+    organization['officialNameEnglish'],
+    organization['shortName'],
+  ].whereType<String>().join(' ');
+  return _normalizeSearchText(searchable).contains(normalizedQuery);
 }
 
 class _InvalidQrMessage extends StatelessWidget {
@@ -652,6 +1041,22 @@ String _organizationName(Map<String, dynamic> organization) {
     return displayName['ar'] as String;
   }
   return organization['organizationId'] as String;
+}
+
+String _organizationNameForLocale(
+  Map<String, dynamic> organization,
+  String languageCode,
+) {
+  final preferred = languageCode == 'en'
+      ? organization['officialNameEnglish']
+      : organization['officialNameArabic'];
+  final fallback = languageCode == 'en'
+      ? organization['officialNameArabic']
+      : organization['officialNameEnglish'];
+  for (final value in [preferred, fallback, organization['shortName']]) {
+    if (value is String && value.trim().isNotEmpty) return value.trim();
+  }
+  return organization['organizationId'] as String? ?? '';
 }
 
 String _organizationDescription(Map<String, dynamic> organization) {

@@ -44,9 +44,11 @@ class FirebaseEmulatorConfig {
   }
 
   static Future<void> initialize(FirebaseOptions defaultOptions) async {
-    final app = await Firebase.initializeApp(
-      options: optionsFor(defaultOptions),
-    );
+    final app = Firebase.apps.isEmpty
+        ? await Firebase.initializeApp(
+            options: optionsFor(defaultOptions),
+          )
+        : Firebase.app();
     if (enabled && app.options.projectId != projectId) {
       throw StateError(
         'Firebase initialized with an unexpected projectId: '

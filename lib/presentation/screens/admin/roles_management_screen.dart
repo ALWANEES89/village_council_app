@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/auth/permission_policy.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../providers/app_providers.dart';
 
@@ -55,6 +56,7 @@ class _RolesManagementScreenState extends ConsumerState<RolesManagementScreen> {
     final result = await showDialog<List<String>>(
       context: context,
       builder: (context) => _RolePermissionsDialog(
+        roleId: role['roleId'] as String? ?? '',
         roleName: _roleName(role),
         initialPermissions:
             List<String>.from(role['permissions'] as List? ?? const []),
@@ -64,11 +66,11 @@ class _RolesManagementScreenState extends ConsumerState<RolesManagementScreen> {
     final permissions = result;
     try {
       await ref.read(roleRepositoryProvider).update(
-        organizationId: organizationId,
-        roleId: role['roleId'] as String,
-        data: {'permissions': permissions},
-        actorUserId: ref.read(authServiceProvider).currentUser?.uid,
-      );
+            organizationId: organizationId,
+            roleId: role['roleId'] as String,
+            data: {'permissions': permissions},
+            actorUserId: ref.read(authServiceProvider).currentUser?.uid,
+          );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('تم تحديث الصلاحيات')),
@@ -91,6 +93,8 @@ class _RolesManagementScreenState extends ConsumerState<RolesManagementScreen> {
     final organizationId = currentOrganization?['organizationId'] as String?;
     final organizationName =
         currentOrganization?['officialNameArabic'] as String?;
+    final accessState = ref.watch(adminAccessProvider);
+    final canManageRoles = accessState.asData?.value.canChangeRoles == true;
     _organizationId = organizationId;
     return Directionality(
       textDirection: ui.TextDirection.rtl,
@@ -101,66 +105,68 @@ class _RolesManagementScreenState extends ConsumerState<RolesManagementScreen> {
           backgroundColor: AppColors.primaryDark,
           foregroundColor: Colors.white,
         ),
-        body: organizationId == null
-            ? const Center(child: Text('لم يتم اختيار مجلس'))
-            : Column(
-                children: [
-                  // اسم المجلس الحالي (عرض فقط بدل القائمة المنسدلة).
-                  Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Card(
-                      child: ListTile(
-                        leading: const Icon(Icons.account_balance_outlined,
-                            color: AppColors.primary),
-                        title: const Text('المجلس'),
-                        subtitle: Text(
-                          organizationName ?? organizationId,
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.primaryDark,
+        body: accessState.isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : organizationId == null || !canManageRoles
+                ? const Center(child: Text('لا تملك صلاحية إدارة الصلاحيات'))
+                : Column(
+                    children: [
+                      // اسم المجلس الحالي (عرض فقط بدل القائمة المنسدلة).
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Card(
+                          child: ListTile(
+                            leading: const Icon(Icons.account_balance_outlined,
+                                color: AppColors.primary),
+                            title: const Text('المجلس'),
+                            subtitle: Text(
+                              organizationName ?? organizationId,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.primaryDark,
+                              ),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ),
-                  Expanded(
-                    child: StreamBuilder<List<Map<String, dynamic>>>(
-                      stream: ref
-                          .read(roleRepositoryProvider)
-                          .streamAll(organizationId),
-                      builder: (context, snapshot) {
-                        if (!snapshot.hasData) {
-                          return const Center(
-                              child: CircularProgressIndicator());
-                        }
-                        return ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                          itemCount: snapshot.data!.length,
-                          itemBuilder: (context, index) {
-                            final role = snapshot.data![index];
-                            final permissions = List<String>.from(
-                              role['permissions'] as List? ?? const [],
-                            );
-                            return Card(
-                              child: ListTile(
-                                title: Text(_roleName(role)),
-                                subtitle: Text(
-                                  permissions.isEmpty
-                                      ? 'لا توجد صلاحيات'
-                                      : permissions.join(' • '),
-                                ),
-                                trailing: const Icon(Icons.edit_outlined),
-                                onTap: () => _editRole(role),
-                              ),
+                      Expanded(
+                        child: StreamBuilder<List<Map<String, dynamic>>>(
+                          stream: ref
+                              .read(roleRepositoryProvider)
+                              .streamAll(organizationId),
+                          builder: (context, snapshot) {
+                            if (!snapshot.hasData) {
+                              return const Center(
+                                  child: CircularProgressIndicator());
+                            }
+                            return ListView.builder(
+                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                              itemCount: snapshot.data!.length,
+                              itemBuilder: (context, index) {
+                                final role = snapshot.data![index];
+                                final permissions = List<String>.from(
+                                  role['permissions'] as List? ?? const [],
+                                );
+                                return Card(
+                                  child: ListTile(
+                                    title: Text(_roleName(role)),
+                                    subtitle: Text(
+                                      permissions.isEmpty
+                                          ? 'لا توجد صلاحيات'
+                                          : permissions.join(' • '),
+                                    ),
+                                    trailing: const Icon(Icons.edit_outlined),
+                                    onTap: () => _editRole(role),
+                                  ),
+                                );
+                              },
                             );
                           },
-                        );
-                      },
-                    ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
       ),
     );
   }
@@ -170,10 +176,12 @@ class _RolesManagementScreenState extends ConsumerState<RolesManagementScreen> {
 /// منها هو صلاحيات الدور. تُرجِع قائمة المفاتيح المحدَّدة عند الحفظ.
 class _RolePermissionsDialog extends StatefulWidget {
   const _RolePermissionsDialog({
+    required this.roleId,
     required this.roleName,
     required this.initialPermissions,
   });
 
+  final String roleId;
   final String roleName;
   final List<String> initialPermissions;
 
@@ -182,7 +190,9 @@ class _RolePermissionsDialog extends StatefulWidget {
 }
 
 class _RolePermissionsDialogState extends State<_RolePermissionsDialog> {
-  late final Set<String> _selected = {...widget.initialPermissions};
+  late final Set<String> _selected = {
+    ...sanitizePermissionsForRole(widget.roleId, widget.initialPermissions),
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -190,7 +200,7 @@ class _RolePermissionsDialogState extends State<_RolePermissionsDialog> {
     final keys = <String>{
       ..._permissionsCatalog.keys,
       ...widget.initialPermissions,
-    }.toList();
+    }.where((key) => widget.roleId != 'member' || key != 'fullAccess').toList();
     final fullAccess = _selected.contains('fullAccess');
     return Directionality(
       textDirection: ui.TextDirection.rtl,
@@ -200,31 +210,40 @@ class _RolePermissionsDialogState extends State<_RolePermissionsDialog> {
           width: double.maxFinite,
           child: ListView(
             shrinkWrap: true,
-            children: keys.map((key) {
-              // «صلاحية كاملة» تُلغي الحاجة لبقية الصلاحيات (تعطيلها بصريًّا).
-              final isFull = key == 'fullAccess';
-              final disabled = fullAccess && !isFull;
-              return CheckboxListTile(
-                dense: true,
-                value: _selected.contains(key),
-                controlAffinity: ListTileControlAffinity.leading,
-                title: Text(_permissionsCatalog[key] ?? key),
-                subtitle: Text(
-                  key,
-                  textDirection: ui.TextDirection.ltr,
-                  style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+            children: [
+              if (widget.roleId == 'member')
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    'لا يمكن منح «صلاحية كاملة» لدور العضو العادي. يمكن منحه صلاحيات محددة فقط.',
+                  ),
                 ),
-                onChanged: disabled
-                    ? null
-                    : (checked) => setState(() {
-                          if (checked == true) {
-                            _selected.add(key);
-                          } else {
-                            _selected.remove(key);
-                          }
-                        }),
-              );
-            }).toList(),
+              ...keys.map((key) {
+                // «صلاحية كاملة» تُلغي الحاجة لبقية الصلاحيات (تعطيلها بصريًّا).
+                final isFull = key == 'fullAccess';
+                final disabled = fullAccess && !isFull;
+                return CheckboxListTile(
+                  dense: true,
+                  value: _selected.contains(key),
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: Text(_permissionsCatalog[key] ?? key),
+                  subtitle: Text(
+                    key,
+                    textDirection: ui.TextDirection.ltr,
+                    style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+                  ),
+                  onChanged: disabled
+                      ? null
+                      : (checked) => setState(() {
+                            if (checked == true) {
+                              _selected.add(key);
+                            } else {
+                              _selected.remove(key);
+                            }
+                          }),
+                );
+              }),
+            ],
           ),
         ),
         actions: [

@@ -6,8 +6,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/errors/firebase_function_error_message.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/booking_model.dart';
+import '../../../l10n/generated/app_localizations.dart';
+import '../../../domain/council_operations/council_operations_logic.dart';
 import '../../../providers/app_providers.dart';
 import '../../widgets/reason_input_dialog.dart';
 import 'guest_booking_receipt_screen.dart';
@@ -135,6 +138,38 @@ class _CouncilBookingScreenState extends ConsumerState<CouncilBookingScreen> {
     final user = ref.read(authServiceProvider).currentUser;
     if (organizationId == null || selectedDate == null || user == null) return;
 
+    final availability = ref
+        .read(bookingAvailabilityProvider((
+          organizationId: organizationId,
+          year: _visibleMonth.year,
+          month: _visibleMonth.month,
+        )))
+        .valueOrNull;
+    final hasConfirmedBooking =
+        dateHasConfirmedBooking(availability ?? const [], selectedDate);
+    if (hasConfirmedBooking) {
+      final strings = AppLocalizations.of(context);
+      final proceed = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: Text(strings.bookedDate),
+              content: Text(strings.bookedDateRequestWarning),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: Text(strings.cancel),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: Text(strings.continueAction),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+      if (!proceed || !mounted) return;
+    }
+
     // النموذج StatefulWidget يملك حقوله ويتخلّص من controllers في dispose()
     // بالترتيب الصحيح — يمنع crash "TextEditingController used after disposed"
     // و`_dependents.isEmpty`. والمحتوى قابل للتمرير — يمنع RenderFlex overflow
@@ -165,6 +200,7 @@ class _CouncilBookingScreenState extends ConsumerState<CouncilBookingScreen> {
             bookingDate: selectedDate,
             startTime: startTime,
             endTime: endTime,
+            bookingCategory: result.bookingCategory,
             occasionType: occasionType,
             notes: notes,
           );
@@ -177,7 +213,14 @@ class _CouncilBookingScreenState extends ConsumerState<CouncilBookingScreen> {
       debugPrint('[Bookings] submit failed type=${error.runtimeType}');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تعذر إرسال طلب الحجز. حاول مجددًا.')),
+          SnackBar(
+            content: Text(firebaseFunctionErrorMessage(
+              error,
+              fallback: 'تعذر إرسال طلب الحجز. حاول مجددًا.',
+              unavailableMessage:
+                  'خدمة إنشاء الحجوزات غير متاحة في إصدار الخادم الحالي.',
+            )),
+          ),
         );
       }
     }
@@ -211,7 +254,14 @@ class _CouncilBookingScreenState extends ConsumerState<CouncilBookingScreen> {
       debugPrint('[Bookings] cancel failed type=${error.runtimeType}');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تعذر إلغاء الحجز. حاول مجددًا.')),
+          SnackBar(
+            content: Text(firebaseFunctionErrorMessage(
+              error,
+              fallback: 'تعذر إلغاء الحجز. حاول مجددًا.',
+              unavailableMessage:
+                  'خدمة إلغاء الحجوزات غير متاحة في إصدار الخادم الحالي.',
+            )),
+          ),
         );
       }
     }
@@ -502,7 +552,7 @@ class _MonthCalendar extends StatelessWidget {
                 ));
                 return InkWell(
                   key: ValueKey('booking-day-$day'),
-                  onTap: approved || past ? null : () => onSelected(date),
+                  onTap: past ? null : () => onSelected(date),
                   child: Container(
                     margin: const EdgeInsets.all(3),
                     decoration: BoxDecoration(
@@ -519,14 +569,26 @@ class _MonthCalendar extends StatelessWidget {
                           : null,
                     ),
                     child: Center(
-                      child: Text(
-                        '$day',
-                        style: TextStyle(
-                          color: past ? Colors.grey : null,
-                          fontWeight: approved || pending
-                              ? FontWeight.bold
-                              : FontWeight.normal,
-                        ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '$day',
+                            style: TextStyle(
+                              color: past ? Colors.grey : null,
+                              fontWeight: approved || pending
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                          if (approved)
+                            Text(
+                              AppLocalizations.of(context).booked,
+                              maxLines: 1,
+                              style: const TextStyle(
+                                  fontSize: 7, fontWeight: FontWeight.bold),
+                            ),
+                        ],
                       ),
                     ),
                   ),
@@ -561,6 +623,7 @@ class _BookingOrganization {
 
 class _BookingFormResult {
   const _BookingFormResult({
+    required this.bookingCategory,
     required this.occasionType,
     required this.notes,
     required this.startTime,
@@ -568,6 +631,7 @@ class _BookingFormResult {
   });
 
   final String occasionType;
+  final String bookingCategory;
   final String notes;
   final String startTime;
   final String endTime;
@@ -591,6 +655,7 @@ class _BookingFormSheetState extends State<_BookingFormSheet> {
   final _notesController = TextEditingController();
   final _startController = TextEditingController();
   final _endController = TextEditingController();
+  String _bookingCategory = 'regular';
   bool _canSubmit = false;
 
   @override
@@ -618,6 +683,7 @@ class _BookingFormSheetState extends State<_BookingFormSheet> {
     FocusScope.of(context).unfocus();
     Navigator.of(context).pop(
       _BookingFormResult(
+        bookingCategory: _bookingCategory,
         occasionType: _occasionController.text.trim(),
         notes: _notesController.text.trim(),
         startTime: _startController.text.trim(),
@@ -647,6 +713,26 @@ class _BookingFormSheetState extends State<_BookingFormSheet> {
                     const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 14),
+              DropdownButtonFormField<String>(
+                initialValue: _bookingCategory,
+                decoration: const InputDecoration(labelText: 'نوع الحجز'),
+                items: const [
+                  DropdownMenuItem(
+                    value: 'regular',
+                    child: Text('حجز عادي'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'event',
+                    child: Text('حجز مناسبة'),
+                  ),
+                ],
+                onChanged: (value) {
+                  if (value != null) {
+                    setState(() => _bookingCategory = value);
+                  }
+                },
+              ),
+              const SizedBox(height: 12),
               TextField(
                 controller: _occasionController,
                 textInputAction: TextInputAction.next,

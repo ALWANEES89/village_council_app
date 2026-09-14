@@ -23,3 +23,8 @@ const notificationFunctions = require("./notifications");
 for (const [name, handler] of Object.entries(notificationFunctions)) {
   if (name !== "_test") exports[name] = handler;
 }
+
+const councilManagementFunctions = require("./council_management");
+for (const [name, handler] of Object.entries(councilManagementFunctions)) {
+  if (name !== "_test") exports[name] = handler;
+}

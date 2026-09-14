@@ -1,11 +1,11 @@
-import 'dart:ui' as ui;
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/member_model.dart';
+import '../../../l10n/generated/app_localizations.dart';
+import '../../../presentation/widgets/language_switcher.dart';
 import '../../../providers/app_providers.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
@@ -70,7 +70,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         await ref.read(authServiceProvider).signOut();
         if (!mounted) return;
         setState(() {
-          _error = 'تعذر العثور على بيانات الحساب. تواصل مع إدارة المجلس.';
+          _error = AppLocalizations.of(context).accountDataNotFound;
         });
         return;
       }
@@ -81,7 +81,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       await ref.read(authServiceProvider).signOut();
       if (!mounted) return;
       setState(() {
-        _error = 'رقم الهاتف أو كلمة المرور غير صحيحة';
+        _error = AppLocalizations.of(context).invalidLoginCredentials;
       });
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -116,19 +116,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Directionality(
-      textDirection: ui.TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: AppColors.background,
-        body: SafeArea(
-          child: SingleChildScrollView(
+    final strings = AppLocalizations.of(context);
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: SafeArea(
+        child: SingleChildScrollView(
             padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 40),
             child: Form(
               key: _formKey,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  const SizedBox(height: 40),
+                  const Align(
+                    alignment: AlignmentDirectional.centerEnd,
+                    child: LanguageSwitcher(compact: true),
+                  ),
+                  const SizedBox(height: 24),
                   Container(
                     width: 100,
                     height: 100,
@@ -144,9 +147,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ),
                   ),
                   const SizedBox(height: 28),
-                  const Text(
-                    'مجلس القرية',
-                    style: TextStyle(
+                  Text(
+                    strings.appTitle,
+                    style: const TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.bold,
                       color: AppColors.primary,
@@ -154,15 +157,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'نظام إدارة الاشتراكات المالية',
+                    strings.loginSubtitle,
                     style: TextStyle(fontSize: 15, color: Colors.grey.shade600),
                   ),
                   const SizedBox(height: 48),
-                  const Align(
-                    alignment: Alignment.centerRight,
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
                     child: Text(
-                      'رقم الهاتف',
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                      strings.phoneNumber,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -178,19 +181,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ),
                     validator: (value) {
                       final phone = value?.replaceAll(RegExp(r'\s+'), '') ?? '';
-                      if (phone.isEmpty) return 'أدخل رقم الهاتف';
+                      if (phone.isEmpty) return strings.enterPhoneNumber;
                       if (!RegExp(r'^\d{8}$').hasMatch(phone)) {
-                        return 'رقم الهاتف يجب أن يتكون من 8 أرقام';
+                        return strings.phoneMustBeEightDigits;
                       }
                       return null;
                     },
                   ),
                   const SizedBox(height: 18),
-                  const Align(
-                    alignment: Alignment.centerRight,
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
                     child: Text(
-                      'كلمة المرور',
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                      strings.password,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -213,7 +216,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       ),
                     ),
                     validator: (value) => value == null || value.isEmpty
-                        ? 'أدخل كلمة المرور'
+                        ? strings.enterPassword
                         : null,
                   ),
                   if (_error != null) ...[
@@ -253,9 +256,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                   color: Colors.white,
                                 ),
                               )
-                            : const Text(
-                                'تسجيل الدخول',
-                                style: TextStyle(
+                            : Text(
+                                strings.login,
+                                style: const TextStyle(
                                   fontSize: 17,
                                   fontWeight: FontWeight.bold,
                                   color: Colors.white,
@@ -266,20 +269,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ),
                   const SizedBox(height: 20),
                   Text(
-                    'أدخل رقم هاتفك وكلمة المرور للدخول',
+                    strings.loginInstructions,
                     style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 12),
                   TextButton(
                     onPressed: _isLoading ? null : _openRegister,
-                    child: const Text('إنشاء حساب جديد'),
+                    child: Text(strings.createNewAccount),
                   ),
                 ],
               ),
             ),
           ),
-        ),
       ),
     );
   }

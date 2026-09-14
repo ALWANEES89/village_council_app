@@ -6,9 +6,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../core/errors/firebase_function_error_message.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/transaction_model.dart';
 import '../../../data/repositories/financial_repository.dart';
+import '../../../domain/financial/financial_logic.dart';
 import '../../../providers/app_providers.dart';
 
 class AdminReviewScreen extends ConsumerStatefulWidget {
@@ -88,8 +90,13 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
       debugPrint('[Receipts] secure open failed type=${error.runtimeType}');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('تعذر فتح الإيصال. تحقق من الصلاحية والملف.'),
+          SnackBar(
+            content: Text(firebaseFunctionErrorMessage(
+              error,
+              fallback: 'تعذر فتح الإيصال. تحقق من الصلاحية والملف.',
+              unavailableMessage:
+                  'خدمة فتح الإيصال الآمن غير متاحة في إصدار الخادم الحالي.',
+            )),
             backgroundColor: Colors.red,
           ),
         );
@@ -100,7 +107,14 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
   }
 
   Future<void> _approve(TransactionModel tx) async {
-    if (_isProcessing || _completed) return;
+    final approvalAllowed = canApproveReceipt(
+          reviewStatus: tx.reviewStatus,
+          amountDeclaredBaisa: tx.amountDeclaredBaisa,
+          allocationTotalBaisa: tx.allocationTotalBaisa,
+          differenceBaisa: tx.differenceBaisa,
+        ) &&
+        tx.allocations.isNotEmpty;
+    if (_isProcessing || _completed || !approvalAllowed) return;
     setState(() => _isProcessing = true);
     final user = ref.read(authServiceProvider).currentUser;
     if (user == null) {
@@ -113,10 +127,10 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
             organizationId: tx.organizationId,
             reviewedBy: user.uid,
           );
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
       setState(() => _isProcessing = false);
-      _showFriendlyError();
+      _showFriendlyError(error);
       return;
     }
     if (!mounted) return;
@@ -149,10 +163,10 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
             reviewedBy: user.uid,
             rejectionReason: reason,
           );
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
       setState(() => _isProcessing = false);
-      _showFriendlyError();
+      _showFriendlyError(error);
       return;
     }
     if (!mounted) return;
@@ -181,10 +195,15 @@ class _AdminReviewScreenState extends ConsumerState<AdminReviewScreen> {
     );
   }
 
-  void _showFriendlyError() {
+  void _showFriendlyError(Object error) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('تعذر تنفيذ العملية. قد يكون الإيصال قد تمت مراجعته.'),
+      SnackBar(
+        content: Text(firebaseFunctionErrorMessage(
+          error,
+          fallback: 'تعذر تنفيذ العملية. قد يكون الإيصال قد تمت مراجعته.',
+          unavailableMessage:
+              'خدمة مراجعة الإيصالات غير متاحة في إصدار الخادم الحالي.',
+        )),
         backgroundColor: Colors.red,
       ),
     );
@@ -261,6 +280,13 @@ class _ReviewContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final canApprove = canApproveReceipt(
+          reviewStatus: tx.reviewStatus,
+          amountDeclaredBaisa: tx.amountDeclaredBaisa,
+          allocationTotalBaisa: tx.allocationTotalBaisa,
+          differenceBaisa: tx.differenceBaisa,
+        ) &&
+        tx.allocations.isNotEmpty;
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -319,7 +345,7 @@ class _ReviewContent extends StatelessWidget {
                 Expanded(
                   flex: 2,
                   child: ElevatedButton.icon(
-                    onPressed: onApprove,
+                    onPressed: canApprove ? onApprove : null,
                     icon: const Icon(Icons.check, color: Colors.white),
                     label: const Text('قبول واعتماد',
                         style: TextStyle(

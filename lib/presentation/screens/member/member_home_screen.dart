@@ -1,25 +1,22 @@
-import 'dart:ui' as ui;
-
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
-import '../../../core/auth/role_labels.dart';
+import '../../../core/auth/admin_access.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../data/models/member_model.dart';
+import '../../../data/models/app_notification_model.dart';
+import '../../../data/models/booking_model.dart';
 import '../../../data/models/financial_models.dart';
 import '../../../data/models/membership_model.dart';
-import '../../../data/models/payment_model.dart';
-import '../../../data/models/user_profile_model.dart';
-import '../../../data/repositories/membership_repository.dart';
-import '../../../features/membership_request/data/membership_request_model.dart';
-import '../../../features/membership_request/providers/membership_request_providers.dart';
+import '../../../domain/membership/join_council_routing.dart';
+import '../../../l10n/generated/app_localizations.dart';
 import '../../../providers/app_providers.dart';
-import 'council_booking_screen.dart';
+import '../../widgets/main_bottom_navigation.dart';
 import '../../widgets/notification_bell.dart';
 import '../../widgets/omr_amount.dart';
+import 'council_booking_screen.dart';
 
 class MemberHomeScreen extends ConsumerStatefulWidget {
   const MemberHomeScreen({super.key});
@@ -29,62 +26,12 @@ class MemberHomeScreen extends ConsumerStatefulWidget {
 }
 
 class _MemberHomeScreenState extends ConsumerState<MemberHomeScreen> {
-  String? _cachedMembershipUserId;
-  List<MembershipModel> _cachedMemberships = const [];
-  bool _membershipLoadFailed = false;
-
-  Future<void> _refresh(String userId) async {
-    ref.invalidate(currentMemberProvider);
-    ref.invalidate(userProfileProvider(userId));
-    ref.invalidate(userMembershipsProvider(userId));
-    ref.invalidate(activeUserMembershipsProvider(userId));
-    ref.invalidate(userMembershipRequestsProvider(userId));
-    ref.invalidate(memberPaymentsProvider);
-    await Future<void>.delayed(const Duration(milliseconds: 250));
-  }
-
-  Future<void> _retryMembershipLoading(String userId) async {
-    ref.invalidate(activeUserMembershipsProvider(userId));
-    await Future<void>.delayed(const Duration(milliseconds: 250));
-  }
-
-  List<MembershipModel> _visibleMemberships(
-    String userId,
-    AsyncValue<ActiveMembershipsResult> membershipsAsync,
-  ) {
-    if (_cachedMembershipUserId != userId) {
-      _cachedMembershipUserId = userId;
-      _cachedMemberships = const [];
-      _membershipLoadFailed = false;
-    }
-
-    final result = membershipsAsync.asData?.value;
-    if (result != null) {
-      if (result.memberships.isNotEmpty) {
-        _cachedMemberships = List.unmodifiable(result.memberships);
-      } else if (!result.loadFailed) {
-        _cachedMemberships = const [];
-      }
-      _membershipLoadFailed = result.loadFailed;
-    } else if (membershipsAsync.hasError) {
-      _membershipLoadFailed = true;
-    }
-    return _cachedMemberships;
-  }
-
-  Future<void> _signOut() async {
-    ref.read(organizationContextProvider.notifier).clearOrganization();
-    await ref.read(authServiceProvider).signOut();
-    if (mounted) context.goNamed('login');
-  }
-
-  void _showComingSoon() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('هذه الخدمة ستتوفر قريبًا')),
-    );
-  }
-
   Future<bool> _selectMembership(MembershipModel membership) async {
+    final current = ref.read(organizationContextProvider).currentMembership;
+    if (current?.organizationId == membership.organizationId &&
+        current?.id == membership.id) {
+      return true;
+    }
     try {
       await ref.read(organizationContextProvider.notifier).selectOrganization(
             organizationId: membership.organizationId,
@@ -95,760 +42,537 @@ class _MemberHomeScreenState extends ConsumerState<MemberHomeScreen> {
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تعذر فتح المجلس. حاول مرة أخرى.')),
+          SnackBar(
+            content: Text(AppLocalizations.of(context).couldNotOpenCouncil),
+          ),
         );
       }
       return false;
     }
   }
 
-  Future<void> _enterCouncil(MembershipModel membership) async {
+  Future<void> _openBooking(MembershipModel? membership) async {
+    if (membership != null && !await _selectMembership(membership)) return;
+    if (!mounted) return;
+    context.pushNamed(
+      'rentalPlaceholder',
+      extra: CouncilBookingArguments(
+        organizationId: membership?.organizationId,
+        membershipId: membership?.id,
+      ),
+    );
+  }
+
+  Future<void> _openPayments(MembershipModel? membership) async {
+    if (membership == null) return _showNoMembership();
+    if (await _selectMembership(membership) && mounted) {
+      context.pushNamed('dashboard');
+    }
+  }
+
+  Future<void> _openCouncilDashboard(MembershipModel membership) async {
     if (await _selectMembership(membership) && mounted) {
       context.pushNamed('councilDashboard');
     }
   }
 
-  Future<void> _openPaymentHistory(List<MembershipModel> active) async {
-    if (active.isEmpty) {
-      _showComingSoon();
-      return;
-    }
-    if (await _selectMembership(active.first) && mounted) {
-      context.pushNamed('dashboard');
-    }
-  }
-
-  Future<void> _uploadReceipt(
-    List<MembershipModel> active,
-    List<PaymentModel> payments,
-  ) async {
-    if (active.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('لا توجد عضوية نشطة لرفع إيصال')),
-      );
-      return;
-    }
-    final membership = await _chooseMembership(active);
-    if (membership == null || !mounted) return;
-    final matchingPayments = payments
-        .where((item) => item.status != PaymentStatus.paid)
-        .where(
-          (item) =>
-              item.organizationId == membership.organizationId ||
-              (active.length == 1 && item.organizationId == null),
-        )
-        .toList();
-    final payment = matchingPayments.isEmpty ? null : matchingPayments.first;
-    if (await _selectMembership(membership) && mounted) {
-      context.pushNamed(
-        'uploadReceipt',
-        extra: ReceiptUploadArguments(
-          organizationId: membership.organizationId,
-          membershipId: membership.id,
-          userId: membership.userId,
-          paymentId: payment?.id,
-          periodLabel: payment?.periodLabel ?? 'إيصال دفع عام',
-        ),
-      );
-    }
-  }
-
-  Future<void> _openCouncilBooking(
-    List<MembershipModel> activeMemberships,
-  ) async {
-    if (activeMemberships.isEmpty) {
-      context.pushNamed('rentalPlaceholder');
-      return;
-    }
-    final membership = await _chooseMembership(activeMemberships);
-    if (membership == null || !mounted) return;
+  Future<void> _uploadReceipt(MembershipModel? membership) async {
+    if (membership == null) return _showNoMembership();
+    if (!await _selectMembership(membership) || !mounted) return;
+    final user = ref.read(authStateProvider).valueOrNull;
+    if (user == null) return;
     context.pushNamed(
-      'rentalPlaceholder',
-      extra: CouncilBookingArguments(
+      'uploadReceipt',
+      extra: ReceiptUploadArguments(
         organizationId: membership.organizationId,
         membershipId: membership.id,
+        userId: user.uid,
+        periodLabel: AppLocalizations.of(context).generalPaymentReceipt,
       ),
     );
   }
 
-  Future<MembershipModel?> _chooseMembership(
-    List<MembershipModel> memberships,
+  void _showNoMembership() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(AppLocalizations.of(context).noActiveMembership)),
+    );
+  }
+
+  Future<void> _onBottomNavigation(
+    int index,
+    MembershipModel? membership,
   ) async {
-    if (memberships.length == 1) return memberships.single;
-    final organizations = await Future.wait(
-      memberships.map(
-        (membership) => ref
-            .read(organizationRepositoryProvider)
-            .getById(membership.organizationId),
-      ),
-    );
-    if (!mounted) return null;
-    return showDialog<MembershipModel>(
-      context: context,
-      builder: (context) => SimpleDialog(
-        title: const Text('اختر المجلس'),
-        children: [
-          for (var index = 0; index < memberships.length; index++)
-            SimpleDialogOption(
-              onPressed: () => context.pop(memberships[index]),
-              child: ListTile(
-                leading: const Icon(
-                  Icons.account_balance_outlined,
-                  color: AppColors.primary,
-                ),
-                title: Text(_organizationName(organizations[index])),
-                subtitle: Text(
-                  'رقم العضو: ${memberships[index].memberNumber}',
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
+    switch (index) {
+      case 0:
+        return;
+      case 1:
+        return _openBooking(membership);
+      case 2:
+        return _openPayments(membership);
+      case 3:
+        if (mounted) context.pushNamed('notifications');
+        return;
+      case 4:
+        if (mounted) context.pushNamed('myAccount');
+        return;
+    }
+  }
+
+  Future<void> _refresh(User user, MembershipModel? membership) async {
+    ref.invalidate(userProfileProvider(user.uid));
+    ref.invalidate(activeUserMembershipsProvider(user.uid));
+    ref.invalidate(userNotificationsProvider(user.uid));
+    if (membership != null) {
+      ref.invalidate(userBookingsProvider((
+        organizationId: membership.organizationId,
+        userId: user.uid,
+      )));
+      ref.invalidate(memberChargesProvider((
+        organizationId: membership.organizationId,
+        membershipId: membership.id,
+      )));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final authAsync = ref.watch(authStateProvider);
-    final user =
-        authAsync.asData?.value ?? ref.read(authServiceProvider).currentUser;
+    final strings = AppLocalizations.of(context);
+    final auth = ref.watch(authStateProvider);
+    final user = auth.valueOrNull ?? ref.read(authServiceProvider).currentUser;
+    if (user == null) {
+      return Scaffold(
+        body: Center(
+          child: auth.isLoading
+              ? const CircularProgressIndicator()
+              : FilledButton(
+                  onPressed: () => context.goNamed('login'),
+                  child: Text(strings.returnHome),
+                ),
+        ),
+      );
+    }
 
-    return Directionality(
-      textDirection: ui.TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: const Color(0xFFF6F5FA),
-        body: user == null
-            ? authAsync.isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _SignedOutView(onSignOut: _signOut)
-            : _buildDashboard(user),
-      ),
-    );
-  }
-
-  Widget _buildDashboard(User user) {
-    final memberAsync = ref.watch(currentMemberProvider);
-    final profileAsync = ref.watch(userProfileProvider(user.uid));
-    final membershipsAsync = ref.watch(activeUserMembershipsProvider(user.uid));
-    final requestsAsync = ref.watch(userMembershipRequestsProvider(user.uid));
-    final adminAccessAsync = ref.watch(adminAccessProvider);
-
-    final member = memberAsync.asData?.value;
-    final profile = profileAsync.asData?.value;
-    final memberships = _visibleMemberships(user.uid, membershipsAsync);
-    final requests = requestsAsync.asData?.value ?? const [];
-    final active = memberships
-        .where((item) => item.status == MembershipStatus.active)
-        .toList();
-    final paymentsAsync = active.length == 1
-        ? ref.watch(memberPaymentsProvider((
-            organizationId: active.single.organizationId,
-            membershipId: user.uid,
-          )))
-        : null;
-    final payments = paymentsAsync?.asData?.value ?? const [];
-    final pending = requests
-        .where((item) => item.status == MembershipRequestStatus.pending)
-        .toList();
-    final profileData = _ProfileData.resolve(
-      user: user,
-      profile: profile,
-      member: member,
-      memberNumber: active.isEmpty ? null : active.first.memberNumber,
-    );
-
-    return RefreshIndicator(
-      onRefresh: () => _refresh(user.uid),
-      child: ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.zero,
-        children: [
-          _HeaderAndProfile(
-            profile: profileData,
-            onEditProfile: () => context.pushNamed('profileEdit'),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 28),
+    final membershipsState = ref.watch(activeUserMembershipsProvider(user.uid));
+    final systemOwnerState = ref.watch(systemOwnerAccessProvider);
+    if (membershipsState.isLoading || systemOwnerState.isLoading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    final membershipsResult = membershipsState.valueOrNull;
+    final memberships = membershipsState.valueOrNull?.memberships
+            .where((item) => item.status == MembershipStatus.active)
+            .toList() ??
+        const <MembershipModel>[];
+    final membershipsLoadFailed = membershipsState.hasError ||
+        membershipsResult == null ||
+        membershipsResult.loadFailed;
+    if (membershipsLoadFailed) {
+      return Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                if (profileAsync.hasError || memberAsync.hasError)
-                  const _WarningCard(
-                    message:
-                        'تعذر تحميل بعض بيانات الملف الشخصي، ويمكنك متابعة استخدام التطبيق.',
+                Text(strings.couldNotLoadAccount),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: () =>
+                      ref.invalidate(activeUserMembershipsProvider(user.uid)),
+                  child: Text(strings.retry),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    final isSystemOwner = systemOwnerState.valueOrNull == true;
+    if (shouldOpenJoinCouncil(
+      activeMembershipCount: memberships.length,
+      membershipsLoadFailed: membershipsLoadFailed,
+      isSystemOwner: isSystemOwner,
+    )) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) context.goNamed('joinRequest');
+      });
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: 16),
+              Text(strings.findAndJoinCouncil),
+            ],
+          ),
+        ),
+      );
+    }
+    final contextState = ref.watch(organizationContextProvider);
+    final selected = _selectedMembership(
+      memberships,
+      contextState.currentMembership,
+    );
+    final organizations =
+        ref.watch(organizationsProvider).valueOrNull ?? const [];
+    final organization =
+        _organizationFor(organizations, selected?.organizationId);
+    final locale = Localizations.localeOf(context).languageCode;
+    final councilName =
+        organization == null ? null : _organizationName(organization, locale);
+    final profile = ref.watch(userProfileProvider(user.uid)).valueOrNull;
+    final displayName = profile?.fullName.trim().isNotEmpty == true
+        ? profile!.fullName.trim()
+        : user.displayName?.trim().isNotEmpty == true
+            ? user.displayName!.trim()
+            : strings.member;
+    final access = selected == null
+        ? const AdminAccess()
+        : AdminAccess(
+            isSuperAdmin: isSystemOwner,
+            permissions: selected.permissionsSnapshot,
+            roleId: selected.roleId,
+            role: selected.role,
+            isPrimaryOwner: selected.isPrimaryOwner,
+            status: selected.status.name,
+          );
+    final bookings = selected == null
+        ? null
+        : ref.watch(userBookingsProvider((
+            organizationId: selected.organizationId,
+            userId: user.uid,
+          )));
+    final charges = selected == null
+        ? null
+        : ref.watch(memberChargesProvider((
+            organizationId: selected.organizationId,
+            membershipId: selected.id,
+          )));
+    final notifications = ref.watch(userNotificationsProvider(user.uid));
+
+    return Scaffold(
+      backgroundColor: AppColors.surfaceMuted,
+      bottomNavigationBar: MainBottomNavigation(
+        selectedIndex: 0,
+        onSelected: (index) => _onBottomNavigation(index, selected),
+      ),
+      body: RefreshIndicator(
+        onRefresh: () => _refresh(user, selected),
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(
+              child: _HomeHeader(
+                name: displayName,
+                councilName: councilName,
+                photoUrl: profile?.photoUrl,
+                onProfile: () => context.pushNamed('myAccount'),
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+              sliver: SliverList.list(children: [
+                if (memberships.length > 1) ...[
+                  _CouncilSelector(
+                    memberships: memberships,
+                    organizations: organizations,
+                    selected: selected,
+                    onChanged: (membership) async {
+                      if (membership != null) {
+                        await _selectMembership(membership);
+                      }
+                    },
                   ),
-                if (_membershipLoadFailed || membershipsAsync.hasError)
-                  _WarningCard(
-                    message: 'تعذر تحميل العضويات. حاول مرة أخرى.',
-                    onRetry: () => _retryMembershipLoading(user.uid),
+                  const SizedBox(height: AppSpacing.md),
+                ],
+                _UpcomingBookingCard(
+                  state: bookings,
+                  onBook: () => _openBooking(selected),
+                  onDetails: () => _openBooking(selected),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                _SectionHeader(title: strings.services),
+                const SizedBox(height: AppSpacing.sm),
+                _ServicesGrid(
+                  onBookings: () => _openBooking(selected),
+                  onPayments: () => _openPayments(selected),
+                  onReceipts: () => context.pushNamed('receiptHistory'),
+                  onNotifications: () => context.pushNamed('notifications'),
+                  onUpload: () => _uploadReceipt(selected),
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                _FinancialSummary(state: charges),
+                const SizedBox(height: AppSpacing.md),
+                _LatestNotification(
+                  state: notifications,
+                  organizationId: selected?.organizationId,
+                ),
+                if (selected != null && access.canAccessGoldenAdminPanel) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  _AccessCard(
+                    icon: Icons.dashboard_customize_outlined,
+                    title: strings.councilDashboard,
+                    subtitle: strings.councilDashboardDescription,
+                    onTap: () => _openCouncilDashboard(selected),
                   ),
-                if (requestsAsync.hasError &&
-                    active.isEmpty &&
-                    requests.isEmpty)
-                  const _WarningCard(
-                    message: 'تعذر تحديث طلبات العضوية حاليًا.',
-                  ),
-                if (adminAccessAsync.asData?.value.isSuperAdmin == true) ...[
-                  _SuperAdminCard(
+                ],
+                if (isSystemOwner) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  _AccessCard(
+                    icon: Icons.public,
+                    title: strings.systemAdministration,
+                    subtitle: strings.systemAdministrationDescription,
                     onTap: () => context.pushNamed('adminDashboard'),
                   ),
-                  const SizedBox(height: 18),
                 ],
-                _MembershipSection(
-                  activeMemberships: active,
-                  pendingRequests: pending,
-                  isSuperAdmin:
-                      adminAccessAsync.asData?.value.isSuperAdmin == true,
-                  unavailable: membershipsAsync.hasError && active.isEmpty,
-                  loading: (membershipsAsync.isLoading && active.isEmpty) ||
-                      requestsAsync.isLoading,
-                  onEnterCouncil: _enterCouncil,
-                ),
-                const SizedBox(height: 18),
-                _MainActions(
-                  onJoinRequest: () => context.pushNamed('joinRequest'),
-                  onRentCouncil: () => _openCouncilBooking(active),
-                ),
-                const SizedBox(height: 18),
-                if (active.length == 1)
-                  _AccountSummaryCard(
-                    payments: payments,
-                    loading: paymentsAsync?.isLoading == true,
-                    unavailable: paymentsAsync?.hasError == true,
-                    onOpenHistory: () => _openPaymentHistory(active),
-                  )
-                else
-                  const _WarningCard(
-                    message:
-                        'اختر مجلسًا لعرض ملخص مالي مستقل دون خلط بيانات المجالس.',
+                if (memberships.isEmpty && !membershipsState.isLoading) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  _AccessCard(
+                    icon: Icons.group_add_outlined,
+                    title: strings.joinCouncil,
+                    subtitle: strings.noActiveMembership,
+                    onTap: () => context.pushNamed('joinRequest'),
                   ),
-                const SizedBox(height: 18),
-                const _SectionTitle(title: 'الخدمات السريعة'),
-                const SizedBox(height: 10),
-                _QuickServices(
-                  onUploadReceipt: () => _uploadReceipt(active, payments),
-                  onRentCouncil: () => _openCouncilBooking(active),
-                  onReceiptHistory: () => context.pushNamed('receiptHistory'),
-                  onComingSoon: _showComingSoon,
-                ),
-                const SizedBox(height: 22),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _signOut,
-                    icon: const Icon(Icons.logout),
-                    label: const Text('تسجيل الخروج'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.red.shade700,
-                      backgroundColor: Colors.red.shade50,
-                      side: BorderSide(color: Colors.red.shade200),
-                      padding: const EdgeInsets.symmetric(vertical: 15),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+                ],
+              ]),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 }
 
-class _SuperAdminCard extends StatelessWidget {
-  const _SuperAdminCard({required this.onTap});
-
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Colors.amber.shade700, Colors.amber.shade400],
-        ),
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.amber.withValues(alpha: 0.25),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-        leading: const CircleAvatar(
-          backgroundColor: Colors.white,
-          foregroundColor: Color(0xFF9A6700),
-          child: Icon(Icons.admin_panel_settings_outlined),
-        ),
-        title: const Text(
-          'لوحة التحكم',
-          style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
-        ),
-        subtitle: const Text(
-          'إدارة المجالس والمستخدمين والصلاحيات',
-          style: TextStyle(color: Colors.white),
-        ),
-        trailing: const Icon(Icons.arrow_forward_ios, color: Colors.white),
-        onTap: onTap,
-      ),
-    );
-  }
-}
-
-class _HeaderAndProfile extends StatelessWidget {
-  const _HeaderAndProfile({
-    required this.profile,
-    required this.onEditProfile,
+class _HomeHeader extends StatelessWidget {
+  const _HomeHeader({
+    required this.name,
+    required this.councilName,
+    required this.photoUrl,
+    required this.onProfile,
   });
-
-  final _ProfileData profile;
-  final VoidCallback onEditProfile;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 490,
-      child: Stack(
-        children: [
-          Container(
-            height: 230,
-            padding: const EdgeInsets.fromLTRB(18, 48, 18, 60),
-            decoration: const BoxDecoration(
-              gradient: AppColors.primaryGradient,
-              borderRadius: BorderRadius.vertical(
-                bottom: Radius.circular(34),
-              ),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                GestureDetector(
-                  onTap: () => context.pushNamed('notificationSettings'),
-                  child: Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.16),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Icon(
-                      Icons.account_balance,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.only(top: 8),
-                    child: Text(
-                      'مجلس القرية',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 23,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ),
-                const NotificationBell(color: Colors.white),
-              ],
-            ),
-          ),
-          Positioned(
-            top: 145,
-            left: 16,
-            right: 16,
-            child: _ProfileCard(
-              profile: profile,
-              onEditProfile: onEditProfile,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProfileCard extends StatelessWidget {
-  const _ProfileCard({required this.profile, required this.onEditProfile});
-
-  final _ProfileData profile;
-  final VoidCallback onEditProfile;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x18000000),
-            blurRadius: 24,
-            offset: Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              _ProfileAvatar(photoUrl: profile.photoUrl),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'مرحبًا، ${profile.fullName}',
-                      style: const TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textDark,
-                      ),
-                    ),
-                    const SizedBox(height: 5),
-                    Text(
-                      profile.phone.isEmpty
-                          ? 'رقم الهاتف غير متاح'
-                          : profile.phone,
-                      textDirection: ui.TextDirection.ltr,
-                      style: TextStyle(color: Colors.grey.shade600),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Wrap(
-            runSpacing: 8,
-            children: [
-              if (profile.civilId.isNotEmpty)
-                _ProfileLine(icon: Icons.badge_outlined, text: profile.civilId),
-              if (profile.memberNumber.isNotEmpty)
-                _ProfileLine(
-                  icon: Icons.confirmation_number_outlined,
-                  text: 'رقم العضو: ${profile.memberNumber}',
-                ),
-              if (profile.email.isNotEmpty)
-                _ProfileLine(icon: Icons.email_outlined, text: profile.email),
-              if (profile.address.isNotEmpty)
-                _ProfileLine(
-                  icon: Icons.location_on_outlined,
-                  text: profile.address,
-                ),
-              _ProfileLine(
-                icon: Icons.calendar_today_outlined,
-                text: DateFormat('EEEE، d MMMM yyyy', 'ar')
-                    .format(DateTime.now()),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: onEditProfile,
-              icon: const Icon(Icons.edit_outlined, size: 19),
-              label: const Text('تعديل الملف الشخصي'),
-              style: OutlinedButton.styleFrom(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProfileAvatar extends StatelessWidget {
-  const _ProfileAvatar({this.photoUrl});
-
+  final String name;
+  final String? councilName;
   final String? photoUrl;
+  final VoidCallback onProfile;
 
   @override
   Widget build(BuildContext context) {
-    final url = photoUrl?.trim();
+    final strings = AppLocalizations.of(context);
     return Container(
-      width: 72,
-      height: 72,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: AppColors.primary.withValues(alpha: 0.1),
+      padding: EdgeInsets.fromLTRB(
+        16,
+        MediaQuery.paddingOf(context).top + 10,
+        16,
+        24,
       ),
-      child: url == null || url.isEmpty
-          ? const Icon(Icons.person, size: 42, color: AppColors.primary)
-          : Image.network(
-              url,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => const Icon(
-                Icons.person,
-                size: 42,
-                color: AppColors.primary,
+      decoration: const BoxDecoration(
+        gradient: AppColors.primaryGradient,
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(30)),
+      ),
+      child: Row(children: [
+        InkWell(
+          onTap: onProfile,
+          borderRadius: BorderRadius.circular(30),
+          child: CircleAvatar(
+            radius: 27,
+            foregroundImage: photoUrl?.trim().isNotEmpty == true
+                ? NetworkImage(photoUrl!)
+                : null,
+            child: photoUrl?.trim().isNotEmpty == true
+                ? null
+                : const Icon(Icons.person_outline),
+          ),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                strings.welcomeUser(name),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+              if (councilName != null)
+                Text(
+                  councilName!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white70),
+                ),
+            ],
+          ),
+        ),
+        const NotificationBell(color: Colors.white),
+      ]),
+    );
+  }
+}
+
+class _UpcomingBookingCard extends StatelessWidget {
+  const _UpcomingBookingCard({
+    required this.state,
+    required this.onBook,
+    required this.onDetails,
+  });
+  final AsyncValue<List<BookingModel>>? state;
+  final VoidCallback onBook;
+  final VoidCallback onDetails;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppLocalizations.of(context);
+    if (state == null) {
+      return _HomeCard(child: _EmptyBooking(onBook: onBook));
+    }
+    return state!.when(
+      loading: () => const _HomeCard(
+        child: Center(child: CircularProgressIndicator()),
+      ),
+      error: (_, __) => _HomeCard(
+        child: _StateLine(
+          icon: Icons.cloud_off_outlined,
+          text: strings.couldNotLoad,
+        ),
+      ),
+      data: (items) {
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        final upcoming = items
+            .where((item) =>
+                !item.bookingDate.isBefore(today) &&
+                const {'pending', 'approved', 'confirmed'}
+                    .contains(item.status))
+            .toList()
+          ..sort((a, b) => a.bookingDate.compareTo(b.bookingDate));
+        if (upcoming.isEmpty) {
+          return _HomeCard(child: _EmptyBooking(onBook: onBook));
+        }
+        final booking = upcoming.first;
+        final locale = Localizations.localeOf(context).languageCode;
+        return _HomeCard(
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _SectionHeader(
+              title: strings.upcomingBooking,
+              icon: Icons.event_available_outlined,
+            ),
+            const SizedBox(height: AppSpacing.md),
+            _InfoRow(
+              icon: Icons.calendar_today_outlined,
+              text: DateFormat.yMMMMd(locale).format(booking.bookingDate),
+            ),
+            if (booking.occasionType.trim().isNotEmpty)
+              _InfoRow(
+                icon: Icons.celebration_outlined,
+                text: booking.occasionType,
+              ),
+            _InfoRow(
+              icon: Icons.info_outline,
+              text: _bookingStatus(booking.status, strings),
+            ),
+            Align(
+              alignment: AlignmentDirectional.centerEnd,
+              child: TextButton(
+                onPressed: onDetails,
+                child: Text(strings.viewDetails),
               ),
             ),
+          ]),
+        );
+      },
     );
   }
 }
 
-class _ProfileLine extends StatelessWidget {
-  const _ProfileLine({required this.icon, required this.text});
-
-  final IconData icon;
-  final String text;
+class _EmptyBooking extends StatelessWidget {
+  const _EmptyBooking({required this.onBook});
+  final VoidCallback onBook;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      child: Row(
-        children: [
-          Icon(icon, size: 18, color: AppColors.primary),
-          const SizedBox(width: 8),
-          Expanded(child: Text(text, style: const TextStyle(fontSize: 13))),
-        ],
+    final strings = AppLocalizations.of(context);
+    return Row(children: [
+      const CircleAvatar(
+        radius: 25,
+        backgroundColor: Color(0xFFFFEEE8),
+        child: Icon(Icons.event_available_outlined, color: AppColors.primary),
       ),
-    );
+      const SizedBox(width: AppSpacing.md),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(strings.noUpcomingBooking,
+              style: const TextStyle(fontWeight: FontWeight.w700)),
+          TextButton(onPressed: onBook, child: Text(strings.bookNow)),
+        ]),
+      ),
+    ]);
   }
 }
 
-class _MembershipSection extends StatelessWidget {
-  const _MembershipSection({
-    required this.activeMemberships,
-    required this.pendingRequests,
-    required this.isSuperAdmin,
-    required this.unavailable,
-    required this.loading,
-    required this.onEnterCouncil,
+class _ServicesGrid extends StatelessWidget {
+  const _ServicesGrid({
+    required this.onBookings,
+    required this.onPayments,
+    required this.onReceipts,
+    required this.onNotifications,
+    required this.onUpload,
   });
-
-  final List<MembershipModel> activeMemberships;
-  final List<MembershipRequestModel> pendingRequests;
-  final bool isSuperAdmin;
-  final bool unavailable;
-  final bool loading;
-  final ValueChanged<MembershipModel> onEnterCouncil;
+  final VoidCallback onBookings;
+  final VoidCallback onPayments;
+  final VoidCallback onReceipts;
+  final VoidCallback onNotifications;
+  final VoidCallback onUpload;
 
   @override
   Widget build(BuildContext context) {
-    if (loading && activeMemberships.isEmpty && pendingRequests.isEmpty) {
-      return const _SoftCard(
-        child: Center(child: CircularProgressIndicator()),
-      );
-    }
-    if (activeMemberships.isNotEmpty) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const _SectionTitle(title: 'عضوياتك'),
-          const SizedBox(height: 10),
-          for (final membership in activeMemberships)
-            _MembershipCard(
-              membership: membership,
-              onEnter: () => onEnterCouncil(membership),
-            ),
-          if (pendingRequests.isNotEmpty) ...[
-            const SizedBox(height: 14),
-            const Text(
-              'طلباتك قيد المراجعة',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            for (final request in pendingRequests)
-              _PendingOrganizationName(request: request),
-          ],
-        ],
-      );
-    }
-    if (pendingRequests.isNotEmpty) {
-      return _SoftCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'طلباتك قيد المراجعة',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 6),
-            Text('لديك ${pendingRequests.length} طلب قيد مراجعة الإدارة.'),
-            const SizedBox(height: 12),
-            for (final request in pendingRequests)
-              _PendingOrganizationName(request: request),
-          ],
-        ),
-      );
-    }
-    if (isSuperAdmin) {
-      return const _SoftCard(
-        child: Text(
-          'يمكنك إدارة جميع المجالس من لوحة التحكم دون الحاجة إلى عضوية.',
-          style: TextStyle(fontWeight: FontWeight.w600),
-        ),
-      );
-    }
-    if (unavailable) return const SizedBox.shrink();
-    return const _SoftCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'حالة عضويتك',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-          SizedBox(height: 8),
-          Text('لا توجد عضوية مرتبطة بحسابك حاليًا'),
-          SizedBox(height: 5),
-          Text(
-            'يمكنك طلب الانضمام إلى أحد المجالس',
-            style: TextStyle(color: Colors.grey),
-          ),
-        ],
+    final strings = AppLocalizations.of(context);
+    final items = [
+      (Icons.event_outlined, strings.bookings, onBookings),
+      (Icons.credit_card_outlined, strings.subscriptions, onPayments),
+      (Icons.receipt_long_outlined, strings.receipts, onReceipts),
+      (Icons.notifications_outlined, strings.notifications, onNotifications),
+      (Icons.upload_file_outlined, strings.uploadReceipt, onUpload),
+    ];
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: items.length,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 10,
+        mainAxisExtent: 106,
       ),
-    );
-  }
-}
-
-class _MembershipCard extends ConsumerStatefulWidget {
-  const _MembershipCard({required this.membership, required this.onEnter});
-
-  final MembershipModel membership;
-  final VoidCallback onEnter;
-
-  @override
-  ConsumerState<_MembershipCard> createState() => _MembershipCardState();
-}
-
-class _MembershipCardState extends ConsumerState<_MembershipCard> {
-  late Future<_OrganizationMeta> _meta;
-
-  @override
-  void initState() {
-    super.initState();
-    _meta = _load();
-  }
-
-  @override
-  void didUpdateWidget(covariant _MembershipCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.membership.organizationId !=
-            widget.membership.organizationId ||
-        oldWidget.membership.roleId != widget.membership.roleId) {
-      _meta = _load();
-    }
-  }
-
-  Future<_OrganizationMeta> _load() async {
-    final organization = await ref
-        .read(organizationRepositoryProvider)
-        .getById(widget.membership.organizationId);
-    final role = await ref.read(roleRepositoryProvider).getById(
-          organizationId: widget.membership.organizationId,
-          roleId: widget.membership.roleId,
-        );
-    return _OrganizationMeta(organization: organization, role: role);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final liveMembership = ref
-            .watch(membershipDocumentProvider((
-              organizationId: widget.membership.organizationId,
-              membershipId: widget.membership.id,
-            )))
-            .asData
-            ?.value ??
-        widget.membership;
-    if (liveMembership.status != MembershipStatus.active) {
-      return const SizedBox.shrink();
-    }
-    // الصلاحية العالمية (المالك الأعلى) مصدرها platform_admins وتتغلّب على الدور
-    // المحلي داخل أي مجلس. نعرضها بوضوح حتى لا تبدو الصلاحية مختلفة بين المجالس.
-    final isPlatformOwner =
-        ref.watch(adminAccessProvider).asData?.value.isPlatformOwner == true;
-    return FutureBuilder<_OrganizationMeta>(
-      future: _meta,
-      builder: (context, snapshot) {
-        final name = _organizationName(snapshot.data?.organization);
-        final role = effectiveRoleLabelArabic(
-          liveMembership.roleId,
-          role: liveMembership.role,
-          fallback: _roleName(snapshot.data?.role, liveMembership.roleId),
-          permissions: liveMembership.permissionsSnapshot,
-        );
-        return GestureDetector(
-          onTap: widget.onEnter,
-          child: _SoftCard(
-            margin: const EdgeInsets.only(bottom: 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+      itemBuilder: (context, index) {
+        final item = items[index];
+        return Material(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(AppRadius.tile),
+          child: InkWell(
+            onTap: item.$3,
+            borderRadius: BorderRadius.circular(AppRadius.tile),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const CircleAvatar(
-                      backgroundColor: Color(0x146200EE),
-                      child:
-                          Icon(Icons.account_balance, color: AppColors.primary),
+                    Icon(item.$1, color: AppColors.primary),
+                    const SizedBox(height: 6),
+                    Text(
+                      item.$2,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 12),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        name,
-                        style: const TextStyle(
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    const _StatusBadge(label: 'نشط', color: Colors.green),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Text(
-                    'رقم العضو: ${liveMembership.memberNumber.isEmpty ? '-' : liveMembership.memberNumber}'),
-                if (isPlatformOwner) ...[
-                  Row(
-                    children: [
-                      Icon(Icons.verified_user,
-                          size: 16, color: Colors.amber.shade800),
-                      const SizedBox(width: 4),
-                      const Text(
-                        'الصلاحية: المالك الأعلى',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                  Text(
-                    'الدور داخل هذا المجلس: $role',
-                    style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                  ),
-                ] else
-                  Text('الدور: $role'),
-                Text(
-                  'تاريخ الانضمام: ${DateFormat('yyyy/MM/dd').format(widget.membership.joinedAt)}',
-                ),
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: FilledButton.icon(
-                    onPressed: widget.onEnter,
-                    icon: const Icon(Icons.login, size: 18),
-                    label: const Text('دخول المجلس'),
-                  ),
-                ),
-              ],
+                  ]),
             ),
           ),
         );
@@ -857,522 +581,282 @@ class _MembershipCardState extends ConsumerState<_MembershipCard> {
   }
 }
 
-class _PendingOrganizationName extends ConsumerStatefulWidget {
-  const _PendingOrganizationName({required this.request});
-
-  final MembershipRequestModel request;
-
-  @override
-  ConsumerState<_PendingOrganizationName> createState() =>
-      _PendingOrganizationNameState();
-}
-
-class _PendingOrganizationNameState
-    extends ConsumerState<_PendingOrganizationName> {
-  late Future<Map<String, dynamic>?> _organization;
-
-  @override
-  void initState() {
-    super.initState();
-    _organization = ref
-        .read(organizationRepositoryProvider)
-        .getById(widget.request.organizationId);
-  }
+class _FinancialSummary extends StatelessWidget {
+  const _FinancialSummary({required this.state});
+  final AsyncValue<List<FinancialCharge>>? state;
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Map<String, dynamic>?>(
-      future: _organization,
-      builder: (context, snapshot) => ListTile(
-        dense: true,
-        contentPadding: EdgeInsets.zero,
-        leading: const Icon(Icons.hourglass_top, color: Colors.orange),
-        title: Text(
-          _organizationName(snapshot.data),
+    final strings = AppLocalizations.of(context);
+    return _HomeCard(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _SectionHeader(
+          title: strings.outstandingAmount,
+          icon: Icons.account_balance_wallet_outlined,
         ),
-      ),
+        const SizedBox(height: AppSpacing.md),
+        if (state == null)
+          Text(strings.noActiveMembership)
+        else
+          state!.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (_, __) => _StateLine(
+              icon: Icons.cloud_off_outlined,
+              text: strings.couldNotLoad,
+            ),
+            data: (items) => OmrAmount(
+              amountBaisa: items.fold<int>(
+                0,
+                (sum, item) => sum + item.balanceBaisa,
+              ),
+              style: const TextStyle(
+                fontSize: 25,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+      ]),
     );
   }
 }
 
-class _MainActions extends StatelessWidget {
-  const _MainActions({
-    required this.onJoinRequest,
-    required this.onRentCouncil,
-  });
-
-  final VoidCallback onJoinRequest;
-  final VoidCallback onRentCouncil;
+class _LatestNotification extends StatelessWidget {
+  const _LatestNotification({required this.state, this.organizationId});
+  final AsyncValue<List<AppNotificationModel>> state;
+  final String? organizationId;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: _LargeActionCard(
-            icon: Icons.group_add_outlined,
-            title: 'طلب الانضمام إلى مجلس',
-            subtitle: 'انضم إلى أحد المجالس المتاحة',
-            onTap: onJoinRequest,
-          ),
+    final strings = AppLocalizations.of(context);
+    return _HomeCard(
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _SectionHeader(
+          title: strings.latestNotification,
+          icon: Icons.notifications_active_outlined,
         ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _LargeActionCard(
-            icon: Icons.home_work_outlined,
-            title: 'استئجار مجلس',
-            subtitle: 'استأجر مجلس لإقامة مناسبة',
-            onTap: onRentCouncil,
-          ),
+        const SizedBox(height: AppSpacing.sm),
+        state.when(
+          loading: () => const LinearProgressIndicator(),
+          error: (_, __) => Text(strings.couldNotLoad),
+          data: (items) {
+            final scoped = organizationId == null
+                ? items
+                : items
+                    .where((item) => item.organizationId == organizationId)
+                    .toList();
+            return scoped.isEmpty
+                ? Text(strings.noNotifications)
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                        Text(scoped.first.title,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w700)),
+                        Text(
+                          scoped.first.body,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              const TextStyle(color: AppColors.textSecondary),
+                        ),
+                      ]);
+          },
         ),
-      ],
+      ]),
     );
   }
 }
 
-class _LargeActionCard extends StatelessWidget {
-  const _LargeActionCard({
+class _AccessCard extends StatelessWidget {
+  const _AccessCard({
     required this.icon,
     required this.title,
     required this.subtitle,
     required this.onTap,
   });
-
   final IconData icon;
   final String title;
   final String subtitle;
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(20),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(20),
-        child: Container(
-          height: 158,
-          padding: const EdgeInsets.all(15),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            boxShadow: const [
-              BoxShadow(color: Color(0x0E000000), blurRadius: 18),
-            ],
+  Widget build(BuildContext context) => _HomeCard(
+        padding: EdgeInsets.zero,
+        child: ListTile(
+          minTileHeight: 78,
+          leading: CircleAvatar(
+            backgroundColor: const Color(0xFFFFEEE8),
+            child: Icon(icon, color: AppColors.primary),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(13),
-                ),
-                child: Icon(icon, color: AppColors.primary),
-              ),
-              const Spacer(),
-              Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 4),
-              Text(
-                subtitle,
-                maxLines: 2,
-                style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
-              ),
-            ],
-          ),
+          title:
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+          subtitle: Text(subtitle),
+          trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+          onTap: onTap,
         ),
-      ),
-    );
-  }
+      );
 }
 
-class _AccountSummaryCard extends StatelessWidget {
-  const _AccountSummaryCard({
-    required this.payments,
-    required this.loading,
-    required this.unavailable,
-    required this.onOpenHistory,
+class _CouncilSelector extends StatelessWidget {
+  const _CouncilSelector({
+    required this.memberships,
+    required this.organizations,
+    required this.selected,
+    required this.onChanged,
   });
-
-  final List<PaymentModel> payments;
-  final bool loading;
-  final bool unavailable;
-  final VoidCallback onOpenHistory;
-
-  @override
-  Widget build(BuildContext context) {
-    final paid = payments.where((item) => item.status == PaymentStatus.paid);
-    final due = payments.where((item) => item.status != PaymentStatus.paid);
-    final paidAmountBaisa = paid.fold<int>(
-      0,
-      (sum, item) => sum + (item.amount * 1000).round(),
-    );
-    final remainingBaisa = due.fold<int>(
-      0,
-      (sum, item) => sum + (item.amount * 1000).round(),
-    );
-    return _SoftCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const _SectionTitle(title: 'ملخص الحساب'),
-          if (loading) ...[
-            const SizedBox(height: 12),
-            const LinearProgressIndicator(),
-          ] else ...[
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                _SummaryItem(
-                    label: 'الفواتير المستحقة', value: '${due.length}'),
-                _SummaryItem(
-                    label: 'الفواتير المدفوعة', value: '${paid.length}'),
-              ],
-            ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                _SummaryItem(
-                  label: 'المبلغ المدفوع',
-                  amountBaisa: paidAmountBaisa,
-                ),
-                _SummaryItem(
-                  label: 'المبلغ المتبقي',
-                  amountBaisa: remainingBaisa,
-                ),
-              ],
-            ),
-          ],
-          if (unavailable) ...[
-            const SizedBox(height: 10),
-            const Text(
-              'تعذر تحديث بيانات المدفوعات حاليًا، وتظهر القيم الافتراضية.',
-              style: TextStyle(fontSize: 12, color: Colors.orange),
-            ),
-          ],
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton(
-              onPressed: onOpenHistory,
-              child: const Text('عرض سجل المدفوعات'),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SummaryItem extends StatelessWidget {
-  const _SummaryItem({
-    required this.label,
-    this.value,
-    this.amountBaisa,
-  }) : assert(value != null || amountBaisa != null);
-
-  final String label;
-  final String? value;
-  final int? amountBaisa;
+  final List<MembershipModel> memberships;
+  final List<Map<String, dynamic>> organizations;
+  final MembershipModel? selected;
+  final ValueChanged<MembershipModel?> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Column(
-        children: [
-          if (amountBaisa != null)
-            OmrAmount(
-              amountBaisa: amountBaisa!,
-              style: const TextStyle(
-                fontSize: 19,
-                fontWeight: FontWeight.bold,
-                color: AppColors.primaryDark,
-              ),
-            )
-          else
-            Text(
-              value!,
-              style: const TextStyle(
-                fontSize: 19,
-                fontWeight: FontWeight.bold,
-                color: AppColors.primaryDark,
-              ),
-            ),
-          const SizedBox(height: 3),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-          ),
-        ],
+    final locale = Localizations.localeOf(context).languageCode;
+    return DropdownButtonFormField<MembershipModel>(
+      initialValue: selected,
+      decoration: InputDecoration(
+        labelText: AppLocalizations.of(context).currentCouncil,
+        prefixIcon: const Icon(Icons.account_balance_outlined),
+        filled: true,
+        fillColor: AppColors.surface,
       ),
-    );
-  }
-}
-
-class _QuickServices extends StatelessWidget {
-  const _QuickServices({
-    required this.onUploadReceipt,
-    required this.onRentCouncil,
-    required this.onReceiptHistory,
-    required this.onComingSoon,
-  });
-
-  final VoidCallback onUploadReceipt;
-  final VoidCallback onRentCouncil;
-  final VoidCallback onReceiptHistory;
-  final VoidCallback onComingSoon;
-
-  @override
-  Widget build(BuildContext context) {
-    final services = [
-      (Icons.upload_file_outlined, 'رفع إيصال', onUploadReceipt),
-      (Icons.event_available_outlined, 'حجز مجلس', onRentCouncil),
-      (Icons.history_outlined, 'سجل الإيصالات', onReceiptHistory),
-      (Icons.campaign_outlined, 'الإعلانات', onComingSoon),
-      (Icons.help_outline, 'الأسئلة الشائعة', onComingSoon),
-      (Icons.support_agent_outlined, 'تواصل معنا', onComingSoon),
-    ];
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: services.length,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 10,
-        childAspectRatio: 1.08,
-      ),
-      itemBuilder: (context, index) {
-        final service = services[index];
-        return Material(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(17),
-          child: InkWell(
-            onTap: service.$3,
-            borderRadius: BorderRadius.circular(17),
-            child: Padding(
-              padding: const EdgeInsets.all(10),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(service.$1, color: AppColors.primary, size: 29),
-                  const SizedBox(height: 8),
-                  Text(
-                    service.$2,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ],
-              ),
-            ),
+      items: memberships.map((membership) {
+        final organization =
+            _organizationFor(organizations, membership.organizationId) ??
+                {'organizationId': membership.organizationId};
+        return DropdownMenuItem(
+          value: membership,
+          child: Text(
+            _organizationName(organization, locale),
+            overflow: TextOverflow.ellipsis,
           ),
         );
-      },
+      }).toList(),
+      onChanged: onChanged,
     );
   }
 }
 
-class _WarningCard extends StatelessWidget {
-  const _WarningCard({required this.message, this.onRetry});
-
-  final String message;
-  final VoidCallback? onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.orange.shade50,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.orange.shade100),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.info_outline, color: Colors.orange),
-          const SizedBox(width: 9),
-          Expanded(child: Text(message, style: const TextStyle(fontSize: 12))),
-          if (onRetry != null)
-            TextButton(onPressed: onRetry, child: const Text('إعادة المحاولة')),
-        ],
-      ),
-    );
-  }
-}
-
-class _SoftCard extends StatelessWidget {
-  const _SoftCard({required this.child, this.margin});
-
+class _HomeCard extends StatelessWidget {
+  const _HomeCard({required this.child, this.padding});
   final Widget child;
-  final EdgeInsetsGeometry? margin;
+  final EdgeInsetsGeometry? padding;
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      margin: margin,
-      padding: const EdgeInsets.all(17),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: const [
-          BoxShadow(
-              color: Color(0x0D000000), blurRadius: 18, offset: Offset(0, 7)),
-        ],
-      ),
-      child: child,
-    );
-  }
-}
-
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle({required this.title});
-
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      title,
-      style: const TextStyle(
-        fontSize: 18,
-        fontWeight: FontWeight.bold,
-        color: AppColors.textDark,
-      ),
-    );
-  }
-}
-
-class _StatusBadge extends StatelessWidget {
-  const _StatusBadge({required this.label, required this.color});
-
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(label, style: TextStyle(fontSize: 11, color: color)),
-    );
-  }
-}
-
-class _SignedOutView extends StatelessWidget {
-  const _SignedOutView({required this.onSignOut});
-
-  final VoidCallback onSignOut;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.person_off_outlined, size: 56, color: Colors.grey),
-            const SizedBox(height: 12),
-            const Text('تعذر تحميل بيانات حسابك'),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: onSignOut,
-              child: const Text('العودة إلى تسجيل الدخول'),
-            ),
-          ],
+  Widget build(BuildContext context) => Material(
+        color: AppColors.surface,
+        elevation: 1,
+        shadowColor: const Color(0x0A000000),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          side: const BorderSide(color: AppColors.border),
         ),
-      ),
-    );
-  }
+        clipBehavior: Clip.antiAlias,
+        child: SizedBox(
+          width: double.infinity,
+          child: Padding(
+            padding: padding ?? const EdgeInsets.all(AppSpacing.md),
+            child: child,
+          ),
+        ),
+      );
 }
 
-class _ProfileData {
-  const _ProfileData({
-    required this.fullName,
-    required this.phone,
-    required this.civilId,
-    required this.memberNumber,
-    required this.email,
-    required this.address,
-    this.photoUrl,
-  });
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({required this.title, this.icon});
+  final String title;
+  final IconData? icon;
 
-  final String fullName;
-  final String phone;
-  final String civilId;
-  final String memberNumber;
-  final String email;
-  final String address;
-  final String? photoUrl;
-
-  factory _ProfileData.resolve({
-    required User user,
-    required UserProfileModel? profile,
-    required MemberModel? member,
-    required String? memberNumber,
-  }) {
-    return _ProfileData(
-      fullName: _firstValue([profile?.fullName, member?.fullName], 'عضو'),
-      phone: _firstValue(
-        [
-          profile?.phone,
-          member?.phone,
-          user.phoneNumber,
-          _phoneFromEmail(user.email)
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        if (icon != null) ...[
+          Icon(icon, color: AppColors.primary),
+          const SizedBox(width: AppSpacing.sm),
         ],
-        '',
-      ),
-      civilId: _firstValue([profile?.civilId, member?.civilId], ''),
-      memberNumber: memberNumber?.trim() ?? '',
-      email: profile?.email.trim() ?? '',
-      address: profile?.address.trim() ?? '',
-      photoUrl: profile?.photoUrl,
-    );
+        Expanded(
+          child: Text(
+            title,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+          ),
+        ),
+      ]);
+}
+
+class _InfoRow extends StatelessWidget {
+  const _InfoRow({required this.icon, required this.text});
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+        child: Row(children: [
+          Icon(icon, size: 18, color: AppColors.textSecondary),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(child: Text(text)),
+        ]),
+      );
+}
+
+class _StateLine extends StatelessWidget {
+  const _StateLine({required this.icon, required this.text});
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        Icon(icon, color: AppColors.warning),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(child: Text(text)),
+      ]);
+}
+
+MembershipModel? _selectedMembership(
+  List<MembershipModel> memberships,
+  MembershipModel? current,
+) {
+  if (memberships.isEmpty) return null;
+  if (current == null) return memberships.first;
+  for (final membership in memberships) {
+    if (membership.id == current.id &&
+        membership.organizationId == current.organizationId) {
+      return membership;
+    }
   }
+  return memberships.first;
 }
 
-class _OrganizationMeta {
-  const _OrganizationMeta({required this.organization, required this.role});
-
-  final Map<String, dynamic>? organization;
-  final Map<String, dynamic>? role;
-}
-
-String _firstValue(List<String?> values, String fallback) {
-  for (final value in values) {
-    if (value != null && value.trim().isNotEmpty) return value.trim();
+Map<String, dynamic>? _organizationFor(
+  List<Map<String, dynamic>> organizations,
+  String? organizationId,
+) {
+  if (organizationId == null) return null;
+  for (final organization in organizations) {
+    if (organization['organizationId'] == organizationId) return organization;
   }
-  return fallback;
+  return null;
 }
 
-String? _phoneFromEmail(String? email) {
-  if (email == null || !email.endsWith('@alrahmat.local')) return null;
-  final digits = email.split('@').first;
-  return digits.isEmpty ? null : '+$digits';
+String _organizationName(Map<String, dynamic> organization, String locale) {
+  final preferred = locale == 'en'
+      ? organization['officialNameEnglish']
+      : organization['officialNameArabic'];
+  final fallback = locale == 'en'
+      ? organization['officialNameArabic']
+      : organization['officialNameEnglish'];
+  for (final value in [preferred, fallback, organization['shortName']]) {
+    if (value is String && value.trim().isNotEmpty) return value.trim();
+  }
+  return organization['organizationId'] as String? ?? '-';
 }
 
-String _organizationName(Map<String, dynamic>? data) {
-  if (data == null) return 'اسم المجلس غير متاح';
-  final arabic = data['officialNameArabic'];
-  if (arabic is String && arabic.trim().isNotEmpty) return arabic;
-  final shortName = data['shortName'];
-  if (shortName is String && shortName.trim().isNotEmpty) return shortName;
-  return 'اسم المجلس غير متاح';
-}
-
-String _roleName(Map<String, dynamic>? data, String fallback) {
-  if (data?['roleId'] != fallback) return fallback;
-  if (data == null) return fallback;
-  final name = data['roleName'];
-  if (name is String && name.trim().isNotEmpty) return name;
-  if (name is Map && name['ar'] is String) return name['ar'] as String;
-  return fallback;
-}
+String _bookingStatus(String status, AppLocalizations strings) =>
+    switch (status) {
+      'approved' || 'confirmed' => strings.approved,
+      'pending' => strings.pending,
+      'cancelled' => strings.cancelled,
+      'rejected' => strings.rejected,
+      _ => status,
+    };

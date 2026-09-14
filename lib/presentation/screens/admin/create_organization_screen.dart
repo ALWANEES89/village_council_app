@@ -1,10 +1,14 @@
 import 'dart:ui' as ui;
 
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/errors/firebase_function_error_message.dart';
+import '../../../l10n/generated/app_localizations.dart';
 import '../../../providers/app_providers.dart';
 
 class CreateOrganizationScreen extends ConsumerStatefulWidget {
@@ -57,14 +61,15 @@ class _CreateOrganizationScreenState
 
   Future<void> _submit() async {
     if (_saving || !_formKey.currentState!.validate()) return;
-    final access = await ref.read(adminAccessProvider.future);
+    final isSystemOwner = await ref.read(systemOwnerAccessProvider.future);
     final user = ref.read(authServiceProvider).currentUser;
-    if (!access.isSuperAdmin || user == null) {
+    if (!isSystemOwner || user == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('هذه العملية متاحة للمشرف العام فقط')),
         );
       }
+
       return;
     }
 
@@ -109,13 +114,49 @@ class _CreateOrganizationScreenState
         ),
       );
       context.pop();
-    } catch (_) {
+    } on FirebaseFunctionsException catch (error) {
+      debugPrint(
+        '[CreateOrganization] function failed '
+        'code=${error.code} message=${error.message}',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            firebaseFunctionErrorMessage(
+              error,
+              fallback: 'تعذر حفظ بيانات المجلس',
+              unavailableMessage:
+                  'خدمة إنشاء المجلس غير متاحة حاليًا. يجب نشر الدالة ثم المحاولة مجددًا.',
+            ),
+          ),
+        ),
+      );
+    } catch (error, stackTrace) {
+      debugPrint('[CreateOrganization] failed: $error\n$stackTrace');
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('تعذر حفظ بيانات المجلس')),
       );
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _openMapsLink() async {
+    final value = _googleMapsUrl.text.trim();
+    final uri = Uri.tryParse(value);
+    if (uri == null || !uri.hasScheme) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('أدخل رابط خرائط صحيحًا أولًا')),
+      );
+      return;
+    }
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('تعذر فتح رابط الخرائط')),
+      );
     }
   }
 
@@ -140,6 +181,38 @@ class _CreateOrganizationScreenState
 
   @override
   Widget build(BuildContext context) {
+    final access = ref.watch(systemOwnerAccessProvider);
+    if (access.isLoading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (access.valueOrNull != true) {
+      final strings = AppLocalizations.of(context);
+      return Scaffold(
+        appBar: AppBar(title: Text(strings.systemAdministration)),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.lock_outline,
+                  size: 56,
+                  color: AppColors.primary,
+                ),
+                const SizedBox(height: 14),
+                Text(strings.systemAccessDenied, textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                OutlinedButton(
+                  onPressed: () => context.goNamed('memberHome'),
+                  child: Text(strings.returnHome),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     return Directionality(
       textDirection: ui.TextDirection.rtl,
       child: Scaffold(
@@ -176,6 +249,11 @@ class _CreateOrganizationScreenState
                 required: false,
                 keyboard: TextInputType.url,
                 textDirection: ui.TextDirection.ltr,
+                suffixIcon: IconButton(
+                  tooltip: 'فتح في الخرائط',
+                  onPressed: _openMapsLink,
+                  icon: const Icon(Icons.map_outlined),
+                ),
               ),
               _field(
                 _primaryColor,
@@ -230,6 +308,7 @@ class _CreateOrganizationScreenState
     int maxLines = 1,
     TextInputType? keyboard,
     ui.TextDirection? textDirection,
+    Widget? suffixIcon,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
@@ -238,7 +317,7 @@ class _CreateOrganizationScreenState
         maxLines: maxLines,
         keyboardType: keyboard,
         textDirection: textDirection,
-        decoration: InputDecoration(labelText: label),
+        decoration: InputDecoration(labelText: label, suffixIcon: suffixIcon),
         validator: required
             ? (value) =>
                 value == null || value.trim().isEmpty ? 'هذا الحقل مطلوب' : null

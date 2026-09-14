@@ -33,14 +33,16 @@ function requireEnvironment() {
   const currentPassword = String(process.env.QA_CURRENT_PASSWORD || "");
   const reviewerPassword = String(process.env.QA_REVIEWER_PASSWORD || "");
   const guestPassword = String(process.env.QA_GUEST_PASSWORD || "");
+  const roleMemberPassword = String(process.env.QA_ROLE_MEMBER_PASSWORD || "");
   if (!currentUid) throw new Error("QA_CURRENT_UID is required.");
-  if (currentPassword.length < 6 || reviewerPassword.length < 6 || guestPassword.length < 6) {
+  if (currentPassword.length < 6 || reviewerPassword.length < 6 ||
+      guestPassword.length < 6 || roleMemberPassword.length < 6) {
     throw new Error("QA passwords must be provided at runtime and contain at least 6 characters.");
   }
-  return { projectId, currentUid, currentPassword, reviewerPassword, guestPassword };
+  return { projectId, currentUid, currentPassword, reviewerPassword, guestPassword, roleMemberPassword };
 }
 
-const { projectId, currentUid, currentPassword, reviewerPassword, guestPassword } = requireEnvironment();
+const { projectId, currentUid, currentPassword, reviewerPassword, guestPassword, roleMemberPassword } = requireEnvironment();
 const emulatorCredential = {
   getAccessToken: async () => ({ access_token: "owner", expires_in: 3600 }),
 };
@@ -79,6 +81,12 @@ const currentMember = {
   phone: "00000000",
   email: "96800000000@alrahmat.local",
   displayName: "عضو الاختبار المالي",
+};
+const roleMember = {
+  uid: "qa-role-member",
+  phone: "00000003",
+  email: "96800000003@alrahmat.local",
+  displayName: "عضو ترقية تجريبي",
 };
 const beneficiaries = [
   { uid: "qa-beneficiary-ahmed", fullName: "أحمد سالم", memberNumber: "QA-201", amountBaisa: 12500 },
@@ -129,10 +137,10 @@ function legacyMember(uid, fullName, memberNumber, phone = "") {
   };
 }
 
-function membership(uid, memberNumber, roleId = "member", permissionsSnapshot = []) {
+function membership(uid, memberNumber, roleId = "member", permissionsSnapshot = [], scopedOrganizationId = organizationId) {
   return {
     userId: uid,
-    organizationId,
+    organizationId: scopedOrganizationId,
     memberNumber,
     roleId,
     role: roleId,
@@ -205,7 +213,7 @@ function charge({ membershipId, userId, chargeType, sourceId, periodKey = null, 
   };
 }
 
-async function waitForDocument(reference, predicate, label, timeoutMs = 20000) {
+async function waitForDocument(reference, predicate, label, timeoutMs = 60000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     const snapshot = await reference.get();
@@ -220,6 +228,10 @@ async function seed() {
   const currentAuthUser = await auth.getUser(currentUid);
   const reviewerAuthResult = await upsertAuthUser({ ...reviewer, password: reviewerPassword });
   const guestAuthResult = await upsertAuthUser({ ...guest, password: guestPassword });
+  const roleMemberAuthResult = await upsertAuthUser({
+    ...roleMember,
+    password: roleMemberPassword,
+  });
   const organization = firestore.collection("organizations").doc(organizationId);
   const now = new Date();
   const dueDate = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
@@ -266,6 +278,54 @@ async function seed() {
     ["transactions.review", "reports.view", "receipts.review", "payments.approve", "payments.reject", "payments.read"],
     60, "#2878B5", "fact_check"
   ), { merge: true });
+  batch.set(organization.collection("roles").doc("adminManager"), role(
+    "adminManager", "مدير إداري", "Administrative Manager",
+    ["members.read", "members.manage", "bookings.manage"],
+    70, "#6D28D9", "admin_panel_settings"
+  ), { merge: true });
+
+  // A repeatable UI fixture for verifying that one identity keeps a different
+  // role and data scope in every council. These organizations are emulator-only.
+  const memberCouncilId = "qa_multi_member_council";
+  const reviewerCouncilId = "qa_multi_reviewer_council";
+  const memberCouncil = firestore.collection("organizations").doc(memberCouncilId);
+  const reviewerCouncil = firestore.collection("organizations").doc(reviewerCouncilId);
+  for (const [reference, id, arName, enName] of [
+    [memberCouncil, memberCouncilId, "مجلس QA للعضو", "QA Member Council"],
+    [reviewerCouncil, reviewerCouncilId, "مجلس QA للمراجع", "QA Reviewer Council"],
+  ]) {
+    batch.set(reference, {
+      organizationId: id,
+      officialNameArabic: arName,
+      officialNameEnglish: enName,
+      shortName: arName,
+      status: "active",
+      navigationEnabled: true,
+      qaOnly: true,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+  batch.set(memberCouncil.collection("roles").doc("member"), role(
+    "member", "عضو", "Member",
+    ["profile.read", "payments.read", "bookings.read", "bookings.create"],
+    10, "#707070", "person"
+  ), { merge: true });
+  batch.set(reviewerCouncil.collection("roles").doc("financialReviewer"), role(
+    "financialReviewer", "المراجع المالي", "Financial Reviewer",
+    ["transactions.review", "reports.view", "receipts.review", "payments.read"],
+    60, "#2878B5", "fact_check"
+  ), { merge: true });
+  batch.set(memberCouncil.collection("memberships").doc(currentUid), membership(
+    currentUid, "QA-B-100", "member",
+    ["profile.read", "payments.read", "bookings.read", "bookings.create"],
+    memberCouncilId
+  ), { merge: true });
+  batch.set(reviewerCouncil.collection("memberships").doc(currentUid), membership(
+    currentUid, "QA-C-100", "financialReviewer",
+    ["transactions.review", "reports.view", "receipts.review", "payments.read"],
+    reviewerCouncilId
+  ), { merge: true });
   batch.set(organization.collection("financial_settings").doc("main"), {
     organizationId,
     currency: "OMR",
@@ -303,7 +363,35 @@ async function seed() {
   const currentProfile = profile(currentUid, "عضو الاختبار المالي", "QA-100", currentMember.phone);
   batch.set(firestore.collection("users").doc(currentUid), currentProfile, { merge: true });
   batch.set(firestore.collection("members").doc(currentUid), legacyMember(currentUid, "عضو الاختبار المالي", "QA-100", currentMember.phone), { merge: true });
-  batch.set(organization.collection("memberships").doc(currentUid), membership(currentUid, "QA-100"), { merge: true });
+  batch.set(
+    organization.collection("memberships").doc(currentUid),
+    membership(currentUid, "QA-100", "financialManager", [
+      "members.read", "members.manage", "roles.manage", "notifications.send",
+    ]),
+    { merge: true }
+  );
+
+  batch.set(firestore.collection("users").doc(roleMember.uid), profile(
+    roleMember.uid, roleMember.displayName, "QA-300", "+96800000003"
+  ), { merge: true });
+  batch.set(firestore.collection("members").doc(roleMember.uid), legacyMember(
+    roleMember.uid, roleMember.displayName, "QA-300", "+96800000003"
+  ), { merge: true });
+  batch.set(organization.collection("memberships").doc(roleMember.uid), membership(
+    roleMember.uid, "QA-300", "member", ["profile.read", "payments.read"]
+  ), { merge: true });
+  batch.set(organization.collection("member_directory").doc(roleMember.uid), {
+    membershipId: roleMember.uid,
+    userId: roleMember.uid,
+    fullName: roleMember.displayName,
+    memberNumber: "QA-300",
+    photoUrl: null,
+    active: true,
+    searchNameNormalized: roleMember.displayName,
+    searchPrefixes: [],
+    qaOnly: true,
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
 
   batch.set(firestore.collection("users").doc(reviewer.uid), profile(reviewer.uid, reviewer.displayName, "QA-900", "+96800000001"), { merge: true });
   batch.set(firestore.collection("members").doc(reviewer.uid), legacyMember(reviewer.uid, reviewer.displayName, "QA-900", "+96800000001"), { merge: true });
@@ -550,7 +638,7 @@ async function seed() {
   }
 
   await Promise.all([
-    ...[currentUid, reviewer.uid, ...beneficiaries.map((item) => item.uid)].map((uid) =>
+    ...[currentUid, reviewer.uid, roleMember.uid, ...beneficiaries.map((item) => item.uid)].map((uid) =>
       waitForDocument(organization.collection("member_directory").doc(uid), () => true, `member directory ${uid}`)
     ),
     waitForDocument(memberBooking, (snapshot) => Boolean(snapshot.get("financialChargeId")), "member booking financial charge"),
@@ -571,7 +659,8 @@ async function seed() {
     organizationName: "مجلس الاختبار المالي",
     reviewer: { uid: reviewer.uid, phone: reviewer.phone, authResult: reviewerAuthResult },
     guest: { uid: guest.uid, phone: guest.phone, authResult: guestAuthResult },
-    memberCount: 5,
+    roleMember: { uid: roleMember.uid, phone: roleMember.phone, authResult: roleMemberAuthResult },
+    memberCount: 6,
     qaChargeCount: qaCharges.length,
     currentChargeIds: [currentSubscriptionCharge.chargeId, currentPartialCharge.chargeId],
   }, null, 2));

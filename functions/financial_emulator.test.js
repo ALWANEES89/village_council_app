@@ -8,7 +8,7 @@ const {
   assertSucceeds,
   initializeTestEnvironment,
 } = require("@firebase/rules-unit-testing");
-const { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc, where } = require("firebase/firestore");
+const { collection, collectionGroup, deleteDoc, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc, where } = require("firebase/firestore");
 const { getBytes, ref, uploadBytes } = require("firebase/storage");
 const admin = require("firebase-admin");
 const { Timestamp } = require("firebase-admin/firestore");
@@ -26,11 +26,13 @@ if (admin.apps.length === 0) {
 const {
   bookingFinancialLifecycleHandler,
   cleanupOrphanReceiptsHandler,
+  configureCouncilSubscriptionHandler,
   deliverFinancialNotificationOutboxHandler,
   ensureSubscriptionCharge,
   financialRateLimitId,
   generateSubscriptionChargesHandler,
   getBookingAvailabilityHandler,
+  getCouncilDashboardMetricsHandler,
   getFinancialReceiptDownloadUrlHandler,
   getGuestBookingChargeHandler,
   getPayableChargesHandler,
@@ -43,7 +45,108 @@ const {
   readFinancialReceiptFromEmulator,
   submitGuestBookingReceiptHandler,
   submitFinancialReceiptHandler,
+  updateFinancialSettingsHandler,
 } = require("./financial")._test;
+
+test("council dashboard metrics are count-only, role-aware, Muscat-day aware, and council-isolated", async () => {
+  const database = admin.firestore();
+  const organization = database.doc("organizations/metrics-a");
+  const nowDate = new Date("2026-09-06T08:00:00.000Z"); // 12:00 in Muscat.
+  await organization.set({ organizationId: "metrics-a", status: "active" });
+  await Promise.all([
+    organization.collection("memberships").doc("finance-metrics").set({
+      organizationId: "metrics-a", userId: "finance-metrics", status: "active",
+      roleId: "financialManager", permissionsSnapshot: [],
+    }),
+    organization.collection("memberships").doc("reviewer-metrics").set({
+      organizationId: "metrics-a", userId: "reviewer-metrics", status: "active",
+      roleId: "financialReviewer", permissionsSnapshot: [],
+    }),
+    organization.collection("memberships").doc("active-member").set({
+      organizationId: "metrics-a", userId: "active-member", status: "active",
+      roleId: "member", permissionsSnapshot: [],
+    }),
+    organization.collection("memberships").doc("suspended-member").set({
+      organizationId: "metrics-a", userId: "suspended-member", status: "suspended",
+      roleId: "member", permissionsSnapshot: [],
+    }),
+    organization.collection("membership_requests").doc("pending-request").set({
+      userId: "pending-user", status: "pending",
+    }),
+    database.doc("platform_admins/metrics-system-owner").set({
+      role: "system_owner", status: "active", fullAccess: true,
+    }),
+    database.doc("organizations/metrics-empty").set({
+      organizationId: "metrics-empty", status: "active",
+    }),
+    organization.collection("bookings").doc("same-day-approved").set({
+      bookingDate: Timestamp.fromDate(new Date("2026-09-05T20:00:00.000Z")), status: "approved",
+    }),
+    organization.collection("bookings").doc("future-approved").set({
+      bookingDate: Timestamp.fromDate(new Date("2026-09-06T20:00:00.000Z")), status: "approved",
+      requesterName: "must-not-be-returned",
+    }),
+    organization.collection("bookings").doc("future-pending").set({
+      bookingDate: Timestamp.fromDate(new Date("2026-09-07T20:00:00.000Z")), status: "pending",
+    }),
+    organization.collection("bookings").doc("future-cancelled").set({
+      bookingDate: Timestamp.fromDate(new Date("2026-09-07T20:00:00.000Z")), status: "cancelled",
+    }),
+    organization.collection("bookings").doc("future-rejected").set({
+      bookingDate: Timestamp.fromDate(new Date("2026-09-07T20:00:00.000Z")), status: "rejected",
+    }),
+    organization.collection("bookings").doc("past-approved").set({
+      bookingDate: Timestamp.fromDate(new Date("2026-09-04T20:00:00.000Z")), status: "approved",
+    }),
+  ]);
+
+  const result = await getCouncilDashboardMetricsHandler({
+    auth: { uid: "finance-metrics" }, data: { organizationId: "metrics-a" },
+  }, { database, nowDate });
+  assert.deepEqual(result, { memberCount: 3, upcomingBookingCount: 2 });
+  assert.deepEqual(Object.keys(result).sort(), ["memberCount", "upcomingBookingCount"]);
+
+  const reviewerResult = await getCouncilDashboardMetricsHandler({
+    auth: { uid: "reviewer-metrics" }, data: { organizationId: "metrics-a" },
+  }, { database, nowDate });
+  assert.deepEqual(reviewerResult, result);
+
+  const ownerEmptyResult = await getCouncilDashboardMetricsHandler({
+    auth: { uid: "metrics-system-owner" }, data: { organizationId: "metrics-empty" },
+  }, { database, nowDate });
+  assert.deepEqual(ownerEmptyResult, { memberCount: 0, upcomingBookingCount: 0 });
+
+  await assert.rejects(
+    getCouncilDashboardMetricsHandler({
+      auth: { uid: "metrics-system-owner" }, data: { organizationId: "missing-council" },
+    }, { database, nowDate }),
+    (error) => error.code === "not-found",
+  );
+
+  await assert.rejects(
+    getCouncilDashboardMetricsHandler({ data: { organizationId: "metrics-a" } }, { database, nowDate }),
+    (error) => error.code === "unauthenticated",
+  );
+
+  await assert.rejects(
+    getCouncilDashboardMetricsHandler({
+      auth: { uid: "member" }, data: { organizationId: "metrics-a" },
+    }, { database, nowDate }),
+    (error) => error.code === "permission-denied",
+  );
+  await assert.rejects(
+    getCouncilDashboardMetricsHandler({
+      auth: { uid: "finance-metrics" }, data: { organizationId: "o2" },
+    }, { database, nowDate }),
+    (error) => error.code === "permission-denied",
+  );
+  for (const invalidData of [null, {}, { organizationId: "" }, { organizationId: "a/b" }]) {
+    await assert.rejects(
+      getCouncilDashboardMetricsHandler({ auth: { uid: "finance-metrics" }, data: invalidData }, { database, nowDate }),
+      (error) => error.code === "invalid-argument",
+    );
+  }
+});
 const {
   bootstrapOrganizationHandler,
   createBookingHandler,
@@ -53,8 +156,34 @@ const {
   transferPrimaryCouncilOwnershipHandler,
 } = require("./production_security")._test;
 const { onNotificationCreatedHandler } = require("./notifications")._test;
+const { sendCouncilNotificationHandler } = require("./council_management")._test;
 
 let environment;
+
+test("applicants can list only their own membership requests across councils", async () => {
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await setDoc(doc(db, "organizations/o1/membership_requests/applicant"), {
+      userId: "applicant", organizationId: "o1", status: "pending",
+    });
+    await setDoc(doc(db, "organizations/o2/membership_requests/other"), {
+      userId: "other", organizationId: "o2", status: "pending",
+    });
+  });
+  const db = environment.authenticatedContext("applicant").firestore();
+  const own = await assertSucceeds(getDocs(query(
+    collectionGroup(db, "membership_requests"), where("userId", "==", "applicant"),
+  )));
+  assert.equal(own.size, 1);
+  await assertFails(getDocs(query(
+    collectionGroup(db, "membership_requests"), where("userId", "==", "other"),
+  )));
+  await assertFails(getDocs(collectionGroup(db, "membership_requests")));
+  const anonymous = environment.unauthenticatedContext().firestore();
+  await assertFails(getDocs(query(
+    collectionGroup(anonymous, "membership_requests"), where("userId", "==", "applicant"),
+  )));
+});
 
 function enabledScheduleEnvironment(taskKey) {
   return {
@@ -77,11 +206,16 @@ beforeEach(async () => {
   await environment.clearStorage();
   await environment.withSecurityRulesDisabled(async (context) => {
     const db = context.firestore();
+    await setDoc(doc(db, "organizations/o1"), { organizationId: "o1", status: "active" });
+    await setDoc(doc(db, "organizations/o2"), { organizationId: "o2", status: "active" });
     await setDoc(doc(db, "organizations/o1/memberships/member"), {
       organizationId: "o1", userId: "member", status: "active", roleId: "member", permissionsSnapshot: [],
     });
     await setDoc(doc(db, "organizations/o1/memberships/finance"), {
       organizationId: "o1", userId: "finance", status: "active", roleId: "financialManager", permissionsSnapshot: ["payments.manage", "bookings.manage"],
+    });
+    await setDoc(doc(db, "organizations/o1/memberships/finance-role-only"), {
+      organizationId: "o1", userId: "finance-role-only", status: "active", roleId: "financialManager", permissionsSnapshot: [],
     });
     await setDoc(doc(db, "organizations/o1/memberships/finance2"), {
       organizationId: "o1", userId: "finance2", status: "active", roleId: "financialReviewer", permissionsSnapshot: ["receipts.review", "bookings.manage"],
@@ -163,6 +297,52 @@ after(async () => {
   if (environment) await environment.cleanup();
 });
 
+test("council notification is authorized server-side and isolated to its council", async () => {
+  const database = admin.firestore();
+  const requestId = "council-notification-emulator";
+  const result = await sendCouncilNotificationHandler({
+    auth: { uid: "legacy-owner" },
+    data: {
+      organizationId: "o1",
+      requestId,
+      title: "QA notification",
+      body: "Council A only",
+    },
+  }, { database });
+
+  assert.equal(result.broadcastId, requestId);
+  assert.equal(result.deliveredCount > 0, true);
+  const broadcast = await database.doc(`organizations/o1/broadcasts/${requestId}`).get();
+  assert.equal(broadcast.get("organizationId"), "o1");
+  const memberNotification = await database.doc(
+    `users/member/notifications/broadcast_${requestId}`,
+  ).get();
+  assert.equal(memberNotification.get("organizationId"), "o1");
+  assert.equal(memberNotification.get("deliverySource"), "server");
+  assert.equal((await database.doc(
+    `users/outsider/notifications/broadcast_${requestId}`,
+  ).get()).exists, false);
+
+  await assert.rejects(sendCouncilNotificationHandler({
+    auth: { uid: "member" },
+    data: {
+      organizationId: "o1",
+      requestId: "member-not-authorized",
+      title: "Denied",
+      body: "Denied",
+    },
+  }, { database }), (error) => error.code === "permission-denied");
+  await assert.rejects(sendCouncilNotificationHandler({
+    auth: { uid: "legacy-owner" },
+    data: {
+      organizationId: "o2",
+      requestId: "cross-council-denied",
+      title: "Denied",
+      body: "Denied",
+    },
+  }, { database }), (error) => error.code === "permission-denied");
+});
+
 test("member reads only own charge and cannot list the directory", async () => {
   const db = environment.authenticatedContext("member").firestore();
   await assertSucceeds(getDoc(doc(db, "organizations/o1/charges/c0")));
@@ -175,6 +355,8 @@ test("finance manager can list many council charges but another council cannot",
   const financeDb = environment.authenticatedContext("finance").firestore();
   const result = await assertSucceeds(getDocs(collection(financeDb, "organizations/o1/charges")));
   if (result.size !== 31) throw new Error(`Expected 31 charges, received ${result.size}.`);
+  const roleOnlyDb = environment.authenticatedContext("finance-role-only").firestore();
+  await assertSucceeds(getDocs(collection(roleOnlyDb, "organizations/o1/charges")));
   const outsiderDb = environment.authenticatedContext("outsider").firestore();
   await assertFails(getDocs(query(collection(outsiderDb, "organizations/o1/charges"), where("membershipId", "==", "member"))));
   const ownerDb = environment.authenticatedContext("system-owner").firestore();
@@ -311,6 +493,59 @@ test("primary owner variants are immutable to clients while ordinary memberships
   await assertFails(getDoc(doc(localOwner, "organizations/o1/member_access/legacy-owner")));
 });
 
+test("member role and membership can never retain fullAccess", async () => {
+  const localOwner = environment.authenticatedContext("legacy-owner").firestore();
+  const platformOwner = environment.authenticatedContext("system-owner").firestore();
+  const memberRole = doc(localOwner, "organizations/o1/roles/member");
+
+  await assertFails(setDoc(memberRole, {
+    roleId: "member", permissions: ["profile.read", "fullAccess"],
+  }));
+  await assertSucceeds(setDoc(memberRole, {
+    roleId: "member", permissions: ["profile.read", "payments.read"],
+  }));
+  await assertFails(updateDoc(
+    doc(localOwner, "organizations/o1/memberships/beneficiary"),
+    { roleId: "member", permissionsSnapshot: ["fullAccess"] },
+  ));
+  await assertFails(updateDoc(
+    doc(platformOwner, "organizations/o1/memberships/beneficiary"),
+    { roleId: "member", permissionsSnapshot: ["fullAccess"] },
+  ));
+  await assertSucceeds(updateDoc(
+    doc(localOwner, "organizations/o1/memberships/beneficiary"),
+    { roleId: "member", permissionsSnapshot: ["profile.read"] },
+  ));
+  for (const protectedRole of ["owner", "council_owner", "system_owner"]) {
+    await assertFails(updateDoc(
+      doc(localOwner, "organizations/o1/memberships/beneficiary"),
+      { roleId: protectedRole, permissionsSnapshot: ["fullAccess"] },
+    ));
+  }
+  await assertSucceeds(updateDoc(
+    doc(localOwner, "organizations/o1/memberships/beneficiary"),
+    { roleId: "adminManager", permissionsSnapshot: ["members.manage"] },
+  ));
+
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), "organizations/o1/memberships/polluted-member"), {
+      organizationId: "o1", userId: "polluted-member", status: "active",
+      roleId: "member", permissionsSnapshot: ["fullAccess"],
+    });
+  });
+  await assertFails(getDoc(doc(
+    environment.authenticatedContext("polluted-member").firestore(),
+    "organizations/o1/financial_profile/banking",
+  )));
+  await assert.rejects(
+    listFinancialMembersHandler({
+      auth: { uid: "polluted-member" },
+      data: { organizationId: "o1", pageSize: 10 },
+    }),
+    /Financial review permission/,
+  );
+});
+
 test("membership access projection supports different membership and user IDs", async () => {
   const database = admin.firestore();
   const membership = database.doc("organizations/o1/memberships/projection-membership-99");
@@ -431,7 +666,7 @@ test("booking list is owner-constrained while booking managers can review the co
   await assertFails(getDocs(collection(outsiderDb, "organizations/o1/bookings")));
 });
 
-test("atomic booking slot allows exactly one concurrent create and releases on pending cancellation", async () => {
+test("concurrent requests for one slot both remain pending for administration review", async () => {
   const database = admin.firestore();
   const request = (userId, membershipId, bookingId) => ({
     auth: { uid: userId },
@@ -446,26 +681,58 @@ test("atomic booking slot allows exactly one concurrent create and releases on p
     createBookingHandler(request("member", "member", "concurrent-create-a")),
     createBookingHandler(request("beneficiary", "beneficiary", "concurrent-create-b")),
   ]);
-  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
-  assert.equal(results.filter((result) => result.status === "rejected").length, 1);
+  assert.equal(results.filter((result) => result.status === "fulfilled").length, 2);
+  assert.equal(results.filter((result) => result.status === "rejected").length, 0);
   const bookings = await database.collection("organizations/o1/bookings")
     .where("bookingDay", "==", "2026-10-15").get();
-  assert.equal(bookings.size, 1);
+  assert.equal(bookings.size, 2);
   const slots = await database.collection("organizations/o1/booking_slots").get();
-  assert.equal(slots.size, 1);
+  assert.equal(slots.size, 0);
   const winner = bookings.docs[0];
   await requestBookingCancellationHandler({
     auth: { uid: winner.get("userId") },
     data: { organizationId: "o1", bookingId: winner.id, reason: "QA release" },
   });
   assert.equal((await database.collection("organizations/o1/booking_slots").get()).size, 0);
-  const retryUser = winner.get("userId") === "member" ? "beneficiary" : "member";
-  const retryMembership = retryUser;
-  const retry = await createBookingHandler(request(retryUser, retryMembership, "concurrent-create-retry"));
+  const retry = await createBookingHandler(request("member", "member", "concurrent-create-retry"));
   assert.equal(retry.status, "pending");
 });
 
-test("new booking rejects an active legacy booking that has no slot lock", async () => {
+test("create booking stores a validated booking category", async () => {
+  const database = admin.firestore();
+  const eventBookingId = "event-category-booking";
+  const result = await createBookingHandler({
+    auth: { uid: "member" },
+    data: {
+      organizationId: "o1", membershipId: "member", bookingId: eventBookingId,
+      requesterName: "Event member", requesterPhone: "00000000",
+      bookingDate: "2026-10-16", bookingCategory: "event",
+      occasionType: "QA event", notes: "Synthetic Emulator data",
+    },
+  });
+  assert.equal(result.status, "pending");
+  assert.equal(
+    (await database.doc(`organizations/o1/bookings/${eventBookingId}`).get())
+      .get("bookingCategory"),
+    "event",
+  );
+
+  await assert.rejects(createBookingHandler({
+    auth: { uid: "member" },
+    data: {
+      organizationId: "o1", membershipId: "member", bookingId: "invalid-category-booking",
+      requesterName: "Invalid category", requesterPhone: "00000000",
+      bookingDate: "2026-10-17", bookingCategory: "unknown",
+      occasionType: "QA invalid", notes: "Synthetic Emulator data",
+    },
+  }), (error) => error.code === "invalid-argument");
+  assert.equal(
+    (await database.doc("organizations/o1/bookings/invalid-category-booking").get()).exists,
+    false,
+  );
+});
+
+test("new booking beside an approved legacy booking remains pending", async () => {
   const database = admin.firestore();
   await database.doc("organizations/o1/bookings/legacy-active-without-lock").set({
     bookingId: "legacy-active-without-lock", organizationId: "o1",
@@ -474,7 +741,7 @@ test("new booking rejects an active legacy booking that has no slot lock", async
     startTime: "18:00", endTime: "20:00", resourceId: "council_hall",
     requesterName: "Synthetic", requesterPhone: "00000000",
   });
-  await assert.rejects(createBookingHandler({
+  const result = await createBookingHandler({
     auth: { uid: "member" },
     data: {
       organizationId: "o1", membershipId: "member", bookingId: "blocked-by-legacy",
@@ -482,8 +749,13 @@ test("new booking rejects an active legacy booking that has no slot lock", async
       bookingDate: "2026-12-11", startTime: "18:00", endTime: "20:00",
       occasionType: "QA", notes: "Synthetic Emulator data",
     },
-  }), (error) => error.code === "already-exists");
-  assert.equal((await database.doc("organizations/o1/bookings/blocked-by-legacy").get()).exists, false);
+  });
+  assert.equal(result.status, "pending");
+  assert.equal((await database.doc("organizations/o1/bookings/blocked-by-legacy").get()).get("status"), "pending");
+  const reviewerNotification = await database
+    .collection("users/finance/notifications")
+    .doc("bookingSubmitted_blocked-by-legacy").get();
+  assert.match(reviewerNotification.get("body"), /محجوز مسبقًا/);
 });
 
 test("concurrent approval of legacy bookings for one slot yields one winner", async () => {
@@ -593,6 +865,262 @@ test("financial documents cannot be mutated directly by clients", async () => {
   }));
 });
 
+test("expense documents are readable only to council finance access and never client-writable", async () => {
+  const expensePath = "organizations/o1/expenses/rules-expense";
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await setDoc(doc(context.firestore(), expensePath), {
+      expenseId: "rules-expense",
+      organizationId: "o1",
+      title: "Emulator expense",
+      category: "maintenance",
+      amountBaisa: 1000,
+      status: "posted",
+    });
+  });
+  for (const userId of ["finance", "finance2", "system-owner"]) {
+    const scoped = environment.authenticatedContext(userId).firestore();
+    await assertSucceeds(getDoc(doc(scoped, expensePath)));
+  }
+  for (const userId of ["member", "outsider"]) {
+    const denied = environment.authenticatedContext(userId).firestore();
+    await assertFails(getDoc(doc(denied, expensePath)));
+  }
+  const financeDb = environment.authenticatedContext("finance").firestore();
+  await assertFails(setDoc(doc(financeDb, "organizations/o1/expenses/client-create"), {
+    organizationId: "o1", amountBaisa: 1,
+  }));
+  await assertFails(updateDoc(doc(financeDb, expensePath), { amountBaisa: 2000 }));
+  await assertFails(deleteDoc(doc(financeDb, expensePath)));
+});
+
+test("financial manager saves the member booking fee and an approved member booking uses it", async () => {
+  const requestData = {
+    requestId: "member-booking-fee-update",
+    organizationId: "o1",
+    feeMode: "booking",
+    receiptPaymentsEnabled: true,
+    allowMonthlyPlans: true,
+    allowAnnualPlans: true,
+    memberBookingFeeBaisa: 7250,
+    nonMemberBookingFeeBaisa: 9500,
+    eventBookingFeeBaisa: 3000,
+  };
+  await updateFinancialSettingsHandler({
+    auth: { uid: "finance-role-only" },
+    data: requestData,
+  });
+
+  const database = admin.firestore();
+  const saved = await database.doc("organizations/o1/financial_settings/main").get();
+  assert.equal(saved.get("organizationId"), "o1");
+  assert.equal(saved.get("memberBookingFeeBaisa"), 7250);
+  assert.equal(Number.isSafeInteger(saved.get("memberBookingFeeBaisa")), true);
+
+  const bookingId = "configured-member-booking-fee";
+  const booking = database.doc(`organizations/o1/bookings/${bookingId}`);
+  await booking.set({
+    bookingId,
+    organizationId: "o1",
+    userId: "member",
+    membershipId: "member",
+    status: "pending",
+    bookingDate: Timestamp.now(),
+  });
+  const before = await booking.get();
+  await booking.update({ status: "approved", approvedBy: "finance" });
+  const afterSnapshot = await booking.get();
+  await bookingFinancialLifecycleHandler({
+    id: "configured-member-booking-fee-approved",
+    params: { organizationId: "o1", bookingId },
+    data: { before, after: afterSnapshot },
+  });
+  const charge = await waitForCharge(database, bookingId, "unpaid");
+  assert.equal(charge.get("accountType"), "member");
+  assert.equal(charge.get("membershipId"), "member");
+  assert.equal(charge.get("amountDueBaisa"), 7250);
+  assert.equal(charge.get("balanceBaisa"), 7250);
+
+  const reopened = await database.doc("organizations/o1/financial_settings/main").get();
+  assert.equal(reopened.get("memberBookingFeeBaisa"), 7250);
+
+  await assert.rejects(
+    updateFinancialSettingsHandler({ auth: { uid: "member" }, data: requestData }),
+    /Financial management permission/,
+  );
+  await assert.rejects(
+    updateFinancialSettingsHandler({
+      auth: { uid: "finance-role-only" },
+      data: { ...requestData, requestId: "cross-council-booking-fee", organizationId: "o2" },
+    }),
+    /Active council membership/,
+  );
+  await assert.rejects(
+    updateFinancialSettingsHandler({
+      auth: { uid: "finance-role-only" },
+      data: { ...requestData, requestId: "negative-booking-fee", memberBookingFeeBaisa: -1 },
+    }),
+    /Invalid monetary amount/,
+  );
+  await assert.rejects(
+    updateFinancialSettingsHandler({
+      auth: { uid: "finance-role-only" },
+      data: { ...requestData, requestId: "double-booking-fee", memberBookingFeeBaisa: 7.25 },
+    }),
+    /Invalid monetary amount/,
+  );
+});
+
+test("financial manager saves the council subscription in baisa and members pay its generated charges", async () => {
+  const result = await configureCouncilSubscriptionHandler({
+    auth: { uid: "finance-role-only" },
+    data: {
+      requestId: "configure-o1-monthly",
+      organizationId: "o1",
+      subscriptionEnabled: true,
+      billingCycle: "monthly",
+      amountBaisa: 12345,
+    },
+  });
+  assert.equal(result.feeMode, "subscriptionAndBooking");
+  assert.ok(result.accountsSynced >= 2);
+
+  const database = admin.firestore();
+  const settings = await database.doc("organizations/o1/financial_settings/main").get();
+  const planId = settings.get("defaultSubscriptionPlanId");
+  assert.equal(settings.get("organizationId"), "o1");
+  assert.equal(settings.get("feeMode"), "subscriptionAndBooking");
+  assert.equal(planId, "council-default");
+
+  const plan = await database.doc(`organizations/o1/subscription_plans/${planId}`).get();
+  assert.equal(plan.get("billingCycle"), "monthly");
+  assert.equal(plan.get("amountBaisa"), 12345);
+  assert.equal(Number.isSafeInteger(plan.get("amountBaisa")), true);
+
+  const memberAccount = await database.doc("organizations/o1/member_accounts/member").get();
+  const beneficiaryAccount = await database.doc("organizations/o1/member_accounts/beneficiary").get();
+  assert.equal(memberAccount.get("planId"), planId);
+  assert.equal(beneficiaryAccount.get("planId"), planId);
+  await ensureSubscriptionCharge(memberAccount);
+  await ensureSubscriptionCharge(beneficiaryAccount);
+
+  const allCharges = await database.collection("organizations/o1/charges").get();
+  const memberCharge = allCharges.docs.find((charge) =>
+    charge.get("membershipId") === "member" && charge.get("sourceId") === planId
+  );
+  const beneficiaryCharge = allCharges.docs.find((charge) =>
+    charge.get("membershipId") === "beneficiary" && charge.get("sourceId") === planId
+  );
+  assert.ok(memberCharge);
+  assert.ok(beneficiaryCharge);
+  assert.equal(memberCharge.get("amountDueBaisa"), 12345);
+  assert.equal(Number.isSafeInteger(memberCharge.get("amountDueBaisa")), true);
+
+  const payable = await getPayableChargesHandler({
+    auth: { uid: "member" },
+    data: { organizationId: "o1", membershipIds: ["member", "beneficiary"] },
+  });
+  assert.ok(payable.charges.some((charge) => charge.chargeId === memberCharge.id));
+  assert.ok(payable.charges.some((charge) => charge.chargeId === beneficiaryCharge.id));
+
+  await submitFinancialReceiptHandler(receiptRequest("configured-plan-partial", [
+    {
+      chargeId: memberCharge.id,
+      beneficiaryMembershipId: "member",
+      amountAllocatedBaisa: 1000,
+      balanceBeforeBaisa: 12345,
+    },
+    {
+      chargeId: beneficiaryCharge.id,
+      beneficiaryMembershipId: "beneficiary",
+      amountAllocatedBaisa: 1000,
+      balanceBeforeBaisa: 12345,
+    },
+  ], 2000));
+  await reviewFinancialReceiptHandler({
+    auth: { uid: "finance" },
+    data: {
+      organizationId: "o1",
+      transactionId: "configured-plan-partial",
+      decision: "approve",
+    },
+  });
+  assert.equal((await memberCharge.ref.get()).get("status"), "partial");
+  assert.equal((await memberCharge.ref.get()).get("balanceBaisa"), 11345);
+  assert.equal((await beneficiaryCharge.ref.get()).get("status"), "partial");
+  assert.equal((await beneficiaryCharge.ref.get()).get("balanceBaisa"), 11345);
+
+  const reopenedSettings = await database.doc("organizations/o1/financial_settings/main").get();
+  const reopenedPlan = await database
+    .doc(`organizations/o1/subscription_plans/${reopenedSettings.get("defaultSubscriptionPlanId")}`)
+    .get();
+  assert.equal(reopenedPlan.get("amountBaisa"), 12345);
+  assert.equal(reopenedPlan.get("billingCycle"), "monthly");
+});
+
+test("council subscription writes reject members, reviewers, cross-council managers, and invalid amounts", async () => {
+  const validData = {
+    requestId: "unauthorized-config",
+    organizationId: "o1",
+    subscriptionEnabled: true,
+    billingCycle: "annual",
+    amountBaisa: 5000,
+  };
+  await assert.rejects(
+    configureCouncilSubscriptionHandler({ auth: { uid: "member" }, data: validData }),
+    /Financial management permission/,
+  );
+  await assert.rejects(
+    configureCouncilSubscriptionHandler({ auth: { uid: "finance2" }, data: validData }),
+    /Financial management permission/,
+  );
+  await assert.rejects(
+    configureCouncilSubscriptionHandler({
+      auth: { uid: "finance" },
+      data: { ...validData, requestId: "cross-council-config", organizationId: "o2" },
+    }),
+    /Active council membership/,
+  );
+  await assert.rejects(
+    configureCouncilSubscriptionHandler({
+      auth: { uid: "finance" },
+      data: { ...validData, requestId: "negative-config", amountBaisa: -1 },
+    }),
+    /Invalid monetary amount/,
+  );
+  await assert.rejects(
+    configureCouncilSubscriptionHandler({
+      auth: { uid: "finance" },
+      data: { ...validData, requestId: "double-config", amountBaisa: 1.5 },
+    }),
+    /Invalid monetary amount/,
+  );
+  await assert.rejects(
+    configureCouncilSubscriptionHandler({
+      auth: { uid: "finance" },
+      data: { ...validData, requestId: "missing-org-config", organizationId: "" },
+    }),
+    /organizationId is invalid/,
+  );
+});
+
+test("free council creates no subscription plan, account, or charge", async () => {
+  const result = await configureCouncilSubscriptionHandler({
+    auth: { uid: "system-owner" },
+    data: {
+      requestId: "configure-o2-free",
+      organizationId: "o2",
+      subscriptionEnabled: false,
+    },
+  });
+  assert.equal(result.feeMode, "free");
+  assert.equal(result.accountsSynced, 0);
+  const database = admin.firestore();
+  assert.equal((await database.doc("organizations/o2/financial_settings/main").get()).get("feeMode"), "free");
+  assert.equal((await database.collection("organizations/o2/subscription_plans").get()).empty, true);
+  assert.equal((await database.collection("organizations/o2/member_accounts").get()).empty, true);
+  assert.equal((await database.collection("organizations/o2/charges").get()).empty, true);
+});
+
 test("receipt storage permits only owner direct reads", async () => {
   const ownerStorage = environment.authenticatedContext("member").storage();
   const object = ref(ownerStorage, "organizations/o1/members/member/receipts/r1/receipt.png");
@@ -642,6 +1170,43 @@ test("receipt storage permits only owner direct reads", async () => {
   }));
   const legacyPng = ref(ownerStorage, "receipts/member/legacy-png/receipt.png");
   await assertSucceeds(uploadBytes(legacyPng, new Uint8Array([1]), { contentType: "image/png" }));
+});
+
+test("expense attachments are council-isolated and permission-gated", async () => {
+  const expenseId = "expense-attachment";
+  const storagePath = `organizations/o1/expenses/${expenseId}/invoice.pdf`;
+  const financeObject = ref(environment.authenticatedContext("finance").storage(), storagePath);
+  await assertSucceeds(uploadBytes(financeObject, new Uint8Array([1, 2, 3]), {
+    contentType: "application/pdf",
+    customMetadata: {
+      organizationId: "o1",
+      expenseId,
+      uploaderUid: "finance",
+    },
+  }));
+  await assertSucceeds(getBytes(financeObject));
+  await assertSucceeds(getBytes(
+    ref(environment.authenticatedContext("finance2").storage(), storagePath),
+  ));
+  await assertFails(getBytes(
+    ref(environment.authenticatedContext("member").storage(), storagePath),
+  ));
+  await assertFails(getBytes(
+    ref(environment.authenticatedContext("outsider").storage(), storagePath),
+  ));
+  await assertFails(uploadBytes(
+    ref(environment.authenticatedContext("member").storage(),
+      "organizations/o1/expenses/member-denied/invoice.pdf"),
+    new Uint8Array([1]),
+    {
+      contentType: "application/pdf",
+      customMetadata: {
+        organizationId: "o1",
+        expenseId: "member-denied",
+        uploaderUid: "member",
+      },
+    },
+  ));
 });
 
 test("receipt download authorization supports membershipId different from userId", async () => {
@@ -956,6 +1521,47 @@ test("production approval rolls back every allocation when one balance changes",
     auth: { uid: "finance" },
     data: { organizationId: "o1", transactionId: "rollback-race", decision: "reject", rejectionReason: "Balance changed" },
   });
+});
+
+test("reviewer can reject a malformed legacy pending receipt but cannot approve it", async () => {
+  const database = admin.firestore();
+  const legacyReceipt = database.doc("organizations/o1/transactions/legacy-invalid-pending");
+  await legacyReceipt.set({
+    organizationId: "o1",
+    transactionId: "legacy-invalid-pending",
+    payerUserId: "member",
+    payerName: "Legacy member",
+    amountDeclaredBaisa: 0,
+    allocationTotalBaisa: 0,
+    differenceBaisa: 0,
+    allocations: [],
+    reviewStatus: "pending",
+    status: "pendingReview",
+  });
+
+  await assert.rejects(reviewFinancialReceiptHandler({
+    auth: { uid: "finance" },
+    data: {
+      organizationId: "o1",
+      transactionId: "legacy-invalid-pending",
+      decision: "approve",
+    },
+  }), /amounts do not match/);
+
+  const result = await reviewFinancialReceiptHandler({
+    auth: { uid: "finance" },
+    data: {
+      organizationId: "o1",
+      transactionId: "legacy-invalid-pending",
+      decision: "reject",
+      rejectionReason: "إيصال قديم غير صالح",
+    },
+  });
+  assert.equal(result.status, "rejected");
+  const rejected = await legacyReceipt.get();
+  assert.equal(rejected.get("reviewStatus"), "rejected");
+  assert.equal(rejected.get("status"), "rejected");
+  assert.equal(rejected.get("rejectionReason"), "إيصال قديم غير صالح");
 });
 
 async function waitForCharge(database, bookingId, expectedStatus, timeoutMs = 12000) {
@@ -1351,6 +1957,51 @@ test("guest booking uses non-member fee, is private, and submits only its own re
   await assertFails(getDoc(doc(unrelatedGuestDb, `organizations/o1/charges/${charge.id}`)));
 });
 
+test("booking category selects event fee for members and guests, including zero", async () => {
+  const database = admin.firestore();
+  const settings = database.doc("organizations/o1/financial_settings/main");
+  await settings.update({
+    feeMode: "booking",
+    memberBookingFeeBaisa: 2500,
+    nonMemberBookingFeeBaisa: 4000,
+    eventBookingFeeBaisa: 9000,
+  });
+  const createAndApprove = async (id, userId, bookingCategory) => {
+    const booking = database.doc(`organizations/o1/bookings/${id}`);
+    await booking.set({
+      bookingId: id, organizationId: "o1", userId,
+      ...(userId === "member" ? { membershipId: "member" } : {}),
+      bookingCategory, status: "pending", bookingDate: Timestamp.now(),
+    });
+    const before = await booking.get();
+    await booking.update({ status: "approved", approvedBy: "finance" });
+    await bookingFinancialLifecycleHandler({
+      id: `${id}-approved`,
+      params: { organizationId: "o1", bookingId: id },
+      data: { before, after: await booking.get() },
+    });
+  };
+
+  await createAndApprove("event-member-booking", "member", "event");
+  await createAndApprove("event-guest-booking", "guest", "event");
+  assert.equal(
+    (await waitForCharge(database, "event-member-booking", "unpaid")).get("amountDueBaisa"),
+    9000,
+  );
+  assert.equal(
+    (await waitForCharge(database, "event-guest-booking", "unpaid")).get("amountDueBaisa"),
+    9000,
+  );
+
+  await settings.update({ eventBookingFeeBaisa: 0 });
+  await createAndApprove("event-zero-booking", "member", "event");
+  assert.equal(
+    (await database.collection("organizations/o1/charges")
+      .where("bookingId", "==", "event-zero-booking").get()).size,
+    0,
+  );
+});
+
 test("booking fees honor disabled modes and zero amounts", async () => {
   const database = admin.firestore();
   const settings = database.doc("organizations/o1/financial_settings/main");
@@ -1415,13 +2066,21 @@ test("booking availability supports members and guests, stays redacted and counc
   const memberAvailability = await getBookingAvailabilityHandler({
     auth: { uid: "member" }, data: { organizationId: "o1", year: 2026, month: 8 },
   });
-  assert.equal(memberAvailability.days.length, 3);
+  assert.equal(memberAvailability.days.length, 2);
   memberAvailability.days.forEach((day) => {
     assert.deepEqual(Object.keys(day).sort(), ["date", "endTime", "resourceId", "startTime", "status"]);
     assert.equal("userId" in day || "requesterName" in day || "receiptUrl" in day || "financialChargeId" in day, false);
   });
-  assert.deepEqual(memberAvailability.days.map((day) => day.status).sort(), ["approved", "approved", "pending"]);
+  assert.deepEqual(memberAvailability.days.map((day) => day.status).sort(), ["approved", "approved"]);
   assert.equal(memberAvailability.days.some((day) => day.date.includes("2026-08-07")), false);
+
+  const reviewerAvailability = await getBookingAvailabilityHandler({
+    auth: { uid: "finance" }, data: { organizationId: "o1", year: 2026, month: 8 },
+  });
+  assert.deepEqual(
+    reviewerAvailability.days.map((day) => day.status).sort(),
+    ["approved", "approved", "pending"],
+  );
 
   await assert.rejects(getBookingAvailabilityHandler({
     auth: { uid: "guest2" }, data: { organizationId: "o1", year: 2026, month: 8 },
@@ -1436,7 +2095,7 @@ test("booking availability supports members and guests, stays redacted and counc
   const released = await getBookingAvailabilityHandler({
     auth: { uid: "member" }, data: { organizationId: "o1", year: 2026, month: 8 },
   });
-  assert.equal(released.days.length, 2);
+  assert.equal(released.days.length, 1);
   await assert.rejects(getBookingAvailabilityHandler({
     auth: { uid: "member" }, data: { organizationId: "o2", year: 2026, month: 8 },
   }), /not enabled/);
@@ -1456,7 +2115,7 @@ test("booking availability paginates beyond one hundred without exposing owners"
   }
   await batch.commit();
   const result = await getBookingAvailabilityHandler({
-    auth: { uid: "member" }, data: { organizationId: "o1", year: 2026, month: 12 },
+    auth: { uid: "finance" }, data: { organizationId: "o1", year: 2026, month: 12 },
   });
   assert.equal(result.days.length, 125);
   assert.equal(result.days.some((day) => "userId" in day || "requesterName" in day), false);

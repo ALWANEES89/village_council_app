@@ -106,8 +106,12 @@ class _AuditLogsScreenState extends ConsumerState<AuditLogsScreen> {
     if (options.isEmpty) {
       return const _Message('لا توجد مجالس متاحة لعرض سجلها');
     }
-    final selectedId = options.any((option) => option.id == _organizationId)
-        ? _organizationId!
+    final currentCouncilId = ref
+        .read(organizationContextProvider)
+        .currentOrganization?['organizationId'] as String?;
+    final preferredId = _organizationId ?? currentCouncilId;
+    final selectedId = options.any((option) => option.id == preferredId)
+        ? preferredId!
         : options.first.id;
 
     final query = AuditLogQuery(

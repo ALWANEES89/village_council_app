@@ -25,6 +25,21 @@ class NotificationDeepLink {
     }
   }
 
+  /// Whether the notification has a real screen destination. Dashboard rows
+  /// without a destination remain informational instead of looking clickable.
+  static bool hasDestination({
+    required String type,
+    required String relatedEntityType,
+  }) {
+    return reviewRouteFor(type) != null ||
+        const {
+          'booking',
+          'receipt',
+          'membership',
+          'membershipRequest',
+        }.contains(relatedEntityType);
+  }
+
   /// يفتح الشاشة المناسبة للإشعار. يُستدعى من مركز الإشعارات ومن معالج نقر Push.
   static Future<void> open(
     BuildContext context,
@@ -43,7 +58,8 @@ class NotificationDeepLink {
         organizationId != null &&
         organizationId.isNotEmpty &&
         currentUserId != null) {
-      final entered = await enterOrganization(ref, organizationId, currentUserId);
+      final entered =
+          await enterOrganization(ref, organizationId, currentUserId);
       if (!context.mounted) return;
       if (!entered) {
         _toast(context, 'تعذّر فتح مجلس الطلب. تأكّد من صلاحياتك والاتصال.');

@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../../core/auth/permission_policy.dart';
 import '../../../data/models/membership_model.dart';
 import 'member_management_models.dart';
 
@@ -137,6 +138,11 @@ class MemberManagementRepository {
     required String newRoleId,
     required String actorUserId,
   }) async {
+    if (const {'owner', 'council_owner', 'system_owner'}.contains(newRoleId)) {
+      throw StateError(
+        'Ownership roles can only be assigned through the protected transfer flow.',
+      );
+    }
     final membershipReference =
         await _membershipForUser(organizationId, userId);
     debugPrint('[Members] role update path=${membershipReference.path}');
@@ -155,14 +161,27 @@ class MemberManagementRepository {
       if (!role.exists) throw StateError('Role does not exist.');
 
       final previousRoleId = membership.data()?['roleId'] as String?;
-      if (previousRoleId == newRoleId) return;
-      changed = true;
-      final permissions = List<String>.from(
-        role.data()?['permissions'] as List<dynamic>? ?? const [],
+      final permissions = sanitizePermissionsForRole(
+        newRoleId,
+        List<String>.from(
+          role.data()?['permissions'] as List<dynamic>? ?? const [],
+        ),
+      );
+      final currentPermissions = List<String>.from(
+        membership.data()?['permissionsSnapshot'] as List<dynamic>? ?? const [],
       )..sort();
+      if (previousRoleId == newRoleId &&
+          setEquals(currentPermissions.toSet(), permissions.toSet())) {
+        return;
+      }
+      changed = true;
       transaction.update(membershipReference, {
         'roleId': newRoleId,
-        'permissionsSnapshot': permissions.toSet().toList(),
+        // Keep the legacy compatibility field aligned with the canonical
+        // roleId. Some older readers still consult `role` while the modern
+        // permission path uses roleId + permissionsSnapshot.
+        'role': newRoleId,
+        'permissionsSnapshot': permissions,
         'updatedAt': FieldValue.serverTimestamp(),
         'updatedBy': actorUserId,
       });
@@ -245,9 +264,12 @@ class MemberManagementRepository {
       final chairmanPermissions = List<String>.from(
         chairmanRole.data()?['permissions'] as List<dynamic>? ?? const [],
       )..sort();
-      final memberPermissions = List<String>.from(
-        memberRole.data()?['permissions'] as List<dynamic>? ?? const [],
-      )..sort();
+      final memberPermissions = sanitizePermissionsForRole(
+        'member',
+        List<String>.from(
+          memberRole.data()?['permissions'] as List<dynamic>? ?? const [],
+        ),
+      );
       final now = FieldValue.serverTimestamp();
 
       // خفض الرئيس الحالي (أول chairman ليس هو الجديد وليس المالك الأساسي).
@@ -257,7 +279,7 @@ class MemberManagementRepository {
         transaction.update(memberships.doc(document.id), {
           'roleId': 'member',
           'role': 'member',
-          'permissionsSnapshot': memberPermissions.toSet().toList(),
+          'permissionsSnapshot': memberPermissions,
           'updatedAt': now,
           'updatedBy': actorUserId,
         });
@@ -325,7 +347,7 @@ class MemberManagementRepository {
     }
     final reference = await _membershipForUser(organizationId, userId);
     final historyReference = _history.doc();
-    final sorted = permissions.toSet().toList()..sort();
+    final sorted = sanitizePermissionsForRole(newRoleId, permissions);
     await _firestore.runTransaction((transaction) async {
       final snapshot = await transaction.get(reference);
       if (!snapshot.exists) throw StateError('Membership does not exist.');
@@ -394,9 +416,12 @@ class MemberManagementRepository {
       if (!role.exists) throw StateError('Target role does not exist.');
 
       final sourceData = source.data()!;
-      final permissions = List<String>.from(
-        role.data()?['permissions'] as List<dynamic>? ?? const [],
-      )..sort();
+      final permissions = sanitizePermissionsForRole(
+        targetRoleId,
+        List<String>.from(
+          role.data()?['permissions'] as List<dynamic>? ?? const [],
+        ),
+      );
       final now = FieldValue.serverTimestamp();
       transaction.set(targetReference, {
         ...sourceData,
@@ -408,7 +433,7 @@ class MemberManagementRepository {
         'approvedBy': actorUserId,
         'approvedAt': now,
         'isPrimary': false,
-        'permissionsSnapshot': permissions.toSet().toList(),
+        'permissionsSnapshot': permissions,
         'joinedReason': 'organizationTransfer',
         'leftReason': null,
       });

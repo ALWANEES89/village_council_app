@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,9 +7,12 @@ import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/errors/firebase_function_error_message.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../data/models/council_management_models.dart';
 import '../../../data/models/transaction_model.dart';
 import '../../../data/repositories/financial_repository.dart';
+import '../../../l10n/generated/app_localizations.dart';
 import '../../../providers/app_providers.dart';
 import '../../widgets/omr_amount.dart';
 
@@ -50,6 +52,7 @@ class _TransactionTimelineScreenState
   Future<void> _openReceipt(TransactionModel transaction) async {
     if (_opening) return;
     setState(() => _opening = true);
+    final strings = AppLocalizations.of(context);
     try {
       final access =
           await ref.read(financialRepositoryProvider).getFinancialReceiptAccess(
@@ -59,7 +62,7 @@ class _TransactionTimelineScreenState
       switch (access) {
         case FinancialReceiptUrlAccess(:final url):
           if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-            throw StateError('تعذر فتح رابط الإيصال.');
+            throw StateError(strings.couldNotOpenReceipt);
           }
         case FinancialReceiptBytesAccess(
             :final fileName,
@@ -84,8 +87,12 @@ class _TransactionTimelineScreenState
       debugPrint('[Receipts] secure open failed type=${error.runtimeType}');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('تعذر فتح الإيصال. تحقق من الصلاحية والملف.'),
+          SnackBar(
+            content: Text(firebaseFunctionErrorMessage(
+              error,
+              fallback: strings.couldNotOpenReceipt,
+              unavailableMessage: strings.secureReceiptServiceUnavailable,
+            )),
             backgroundColor: Colors.red,
           ),
         );
@@ -97,6 +104,7 @@ class _TransactionTimelineScreenState
 
   @override
   Widget build(BuildContext context) {
+    final strings = AppLocalizations.of(context);
     final orgId = widget.organizationId ??
         ref
             .watch(organizationContextProvider)
@@ -105,29 +113,34 @@ class _TransactionTimelineScreenState
         ? null
         : ref.watch(financialTransactionProvider(
             (organizationId: orgId, transactionId: widget.transactionId)));
-    return Directionality(
-      textDirection: ui.TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: AppColors.background,
-        appBar: AppBar(
-            title: const Text('تفاصيل المعاملة'),
-            backgroundColor: AppColors.primaryDark,
-            foregroundColor: Colors.white),
-        body: transaction == null
-            ? const Center(child: Text('لا يوجد مجلس حالي.'))
-            : transaction.when(
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (_, __) =>
-                    const Center(child: Text('تعذر تحميل المعاملة.')),
-                data: (item) => item == null
-                    ? const Center(child: Text('لم يتم العثور على المعاملة.'))
-                    : _TransactionDetails(
-                        transaction: item,
-                        opening: _opening,
-                        onOpenReceipt: () => _openReceipt(item),
-                      ),
-              ),
-      ),
+    final reviewerDetail = orgId == null
+        ? null
+        : ref.watch(councilActivityDetailProvider((
+            organizationId: orgId,
+            entityType: 'receipt',
+            entityId: widget.transactionId,
+          )));
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+          title: Text(strings.transactionDetails),
+          backgroundColor: AppColors.primaryDark,
+          foregroundColor: Colors.white),
+      body: transaction == null
+          ? Center(child: Text(strings.noCurrentCouncil))
+          : transaction.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (_, __) =>
+                  Center(child: Text(strings.couldNotLoadTransaction)),
+              data: (item) => item == null
+                  ? Center(child: Text(strings.transactionNotFound))
+                  : _TransactionDetails(
+                      transaction: item,
+                      opening: _opening,
+                      onOpenReceipt: () => _openReceipt(item),
+                      reviewerDetail: reviewerDetail,
+                    ),
+            ),
     );
   }
 }
@@ -137,22 +150,25 @@ class _TransactionDetails extends StatelessWidget {
     required this.transaction,
     required this.opening,
     required this.onOpenReceipt,
+    required this.reviewerDetail,
   });
   final TransactionModel transaction;
   final bool opening;
   final VoidCallback onOpenReceipt;
+  final AsyncValue<CouncilActivityDetail>? reviewerDetail;
 
   @override
   Widget build(BuildContext context) {
+    final strings = AppLocalizations.of(context);
     final color = switch (transaction.reviewStatus) {
       'approved' => Colors.green,
       'rejected' => Colors.red,
       _ => Colors.orange,
     };
     final label = switch (transaction.reviewStatus) {
-      'approved' => 'تم الاعتماد',
-      'rejected' => 'تم الرفض',
-      _ => 'قيد المراجعة',
+      'approved' => strings.approved,
+      'rejected' => strings.rejected,
+      _ => strings.pending,
     };
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -189,10 +205,11 @@ class _TransactionDetails extends StatelessWidget {
               color: Colors.red.shade50,
               child: Padding(
                   padding: const EdgeInsets.all(14),
-                  child: Text('سبب الرفض: ${transaction.rejectionReason}'))),
+                  child: Text(
+                      '${strings.rejectionReason}: ${transaction.rejectionReason}'))),
         const SizedBox(height: 16),
-        const Text('توزيع الإيصال',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        Text(strings.receiptAllocation,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         for (final allocation in transaction.allocations)
           Card(
             child: ListTile(
@@ -215,19 +232,20 @@ class _TransactionDetails extends StatelessWidget {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Icon(Icons.open_in_new),
-          label: Text(opening ? 'جارٍ فتح الإيصال...' : 'عرض ملف الإيصال'),
+          label:
+              Text(opening ? strings.openingReceipt : strings.viewReceiptFile),
         ),
         const SizedBox(height: 16),
-        const Text('مسار المعاملة',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        Text(strings.transactionPath,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         _Step(
             icon: Icons.send_outlined,
-            title: 'تم إرسال الإيصال',
+            title: strings.receiptSubmittedStep,
             date: transaction.submittedAt,
             completed: true),
         _Step(
             icon: Icons.fact_check_outlined,
-            title: 'مراجعة المبلغ والتوزيع',
+            title: strings.receiptReviewStep,
             date: transaction.reviewedAt,
             completed: transaction.reviewStatus != 'pending'),
         _Step(
@@ -235,11 +253,31 @@ class _TransactionDetails extends StatelessWidget {
               ? Icons.cancel_outlined
               : Icons.verified_outlined,
           title: transaction.reviewStatus == 'rejected'
-              ? 'تم الرفض'
-              : 'تم اعتماد التوزيع',
+              ? strings.receiptRejectedStep
+              : strings.receiptAllocationApprovedStep,
           date: transaction.reviewedAt,
           completed: transaction.reviewStatus != 'pending',
         ),
+        if (transaction.reviewStatus != 'pending')
+          reviewerDetail?.when(
+                loading: () => const LinearProgressIndicator(),
+                error: (_, __) => const SizedBox.shrink(),
+                data: (detail) => detail.reviewedByName.isEmpty
+                    ? const SizedBox.shrink()
+                    : Card(
+                        child: ListTile(
+                          leading: const Icon(Icons.verified_user_outlined),
+                          title: Text(
+                            '${AppLocalizations.of(context).reviewedBy}: ${detail.reviewedByName}',
+                          ),
+                          subtitle: detail.reviewedAt == null
+                              ? null
+                              : Text(DateFormat('yyyy/MM/dd - HH:mm')
+                                  .format(detail.reviewedAt!)),
+                        ),
+                      ),
+              ) ??
+              const SizedBox.shrink(),
       ],
     );
   }

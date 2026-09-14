@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:village_council_app/data/models/booking_model.dart';
 import 'package:village_council_app/data/repositories/booking_repository.dart';
+import 'package:village_council_app/l10n/generated/app_localizations.dart';
 import 'package:village_council_app/presentation/screens/member/council_booking_screen.dart';
 
 void main() {
@@ -12,6 +13,8 @@ void main() {
   Widget harness(AsyncValue<List<BookingModel>> availability,
       {ValueChanged<DateTime>? onSelected}) {
     return MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: Scaffold(
         body: SingleChildScrollView(
           child: BookingAvailabilityPanel(
@@ -80,7 +83,7 @@ void main() {
     expect(selected, DateTime(2099, 8, 2));
   });
 
-  testWidgets('approved redacted day is shown but cannot be selected',
+  testWidgets('approved redacted day is shown and can start a pending request',
       (tester) async {
     var selectionCount = 0;
     final unavailable = BookingModel(
@@ -103,7 +106,8 @@ void main() {
     final inkWell = tester.widget<InkWell>(
       find.byKey(const ValueKey('booking-day-2')),
     );
-    expect(inkWell.onTap, isNull);
-    expect(selectionCount, 0);
+    expect(inkWell.onTap, isNotNull);
+    await tester.tap(find.byKey(const ValueKey('booking-day-2')));
+    expect(selectionCount, 1);
   });
 }

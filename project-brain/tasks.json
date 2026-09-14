@@ -30,5 +30,85 @@
     "status": "done",
     "progress": 100,
     "priority": "high"
+  },
+  {
+    "id": "TASK-005",
+    "title": "إعداد رسوم واشتراكات مستقلة لكل مجلس وإصلاح رسوم حجز الأعضاء",
+    "area": "النظام المالي والاشتراكات",
+    "status": "done",
+    "progress": 100,
+    "priority": "high"
+  },
+  {
+    "id": "TASK-006",
+    "title": "مطابقة Cloud Functions المنشورة مع الكود المحلي وخطة تراجع معتمدة",
+    "area": "الجودة والإطلاق",
+    "status": "pending",
+    "progress": 0,
+    "priority": "high"
+  },
+  {
+    "id": "TASK-007",
+    "title": "اختبار رسوم الحجز والمناسبات من البداية للنهاية على Staging",
+    "area": "الحجوزات والنظام المالي",
+    "status": "pending",
+    "progress": 0,
+    "priority": "high"
+  },
+  {
+    "id": "TASK-008",
+    "title": "اعتماد سياسة تصنيف الحجز العادي والمناسبة وصلاحية تغييرها",
+    "area": "الحجوزات والحوكمة",
+    "status": "pending",
+    "progress": 0,
+    "priority": "high"
+  },
+  {
+    "id": "TASK-009",
+    "title": "إغلاق توقيع Android وPlay Integrity وApp Check قبل الإصدار",
+    "area": "الجودة والإطلاق",
+    "status": "pending",
+    "progress": 0,
+    "priority": "high"
+  },
+  {
+    "id": "TASK-010",
+    "title": "ترقية firebase-functions في مسار صيانة منفصل",
+    "area": "الصيانة التقنية",
+    "status": "pending",
+    "progress": 0,
+    "priority": "medium"
+  },
+  {
+    "id": "TASK-011",
+    "title": "إصلاح قالب دور العضو الملوث في الإنتاج بعد نسخة احتياطية وdry-run",
+    "area": "الأدوار والصلاحيات",
+    "status": "pending",
+    "progress": 0,
+    "priority": "high"
+  },
+  {
+    "id": "TASK-012",
+    "title": "فصل لوحة المجلس عن لوحة إدارة النظام وإغلاق QA النهائي",
+    "area": "الواجهات والصلاحيات",
+    "status": "done",
+    "progress": 100,
+    "priority": "high"
+  },
+  {
+    "id": "TASK-013",
+    "title": "استعادة الانضمام للمجالس وحصر تغيير اللغة وإصلاح إرسال تنبيهات المجلس",
+    "area": "العضويات والتجربة والإشعارات",
+    "status": "done",
+    "progress": 100,
+    "priority": "high"
+  },
+  {
+    "id": "TASK-014",
+    "title": "اختبار النسخة المكتملة على هاتف Android حقيقي",
+    "area": "الجودة والإطلاق",
+    "status": "pending",
+    "progress": 0,
+    "priority": "high"
   }
 ]

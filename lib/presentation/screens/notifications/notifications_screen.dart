@@ -1,5 +1,3 @@
-import 'dart:ui' as ui;
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
@@ -7,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../../../core/notifications/notification_deeplink.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/app_notification_model.dart';
+import '../../../l10n/generated/app_localizations.dart';
 import '../../../providers/app_providers.dart';
 import '../../widgets/omr_amount.dart';
 
@@ -15,60 +14,58 @@ class NotificationsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final strings = AppLocalizations.of(context);
     final user = ref.watch(authStateProvider).asData?.value;
     final notifications =
         user == null ? null : ref.watch(userNotificationsProvider(user.uid));
-    return Directionality(
-      textDirection: ui.TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: AppColors.background,
-        appBar: AppBar(
-          title: const Text('الإشعارات'),
-          backgroundColor: AppColors.primaryDark,
-          foregroundColor: Colors.white,
-          actions: [
-            if (user != null)
-              TextButton(
-                onPressed: () async {
-                  try {
-                    await ref
-                        .read(notificationRepositoryProvider)
-                        .markAllAsRead(user.uid);
-                  } catch (_) {
-                    if (context.mounted) _showError(context);
-                  }
-                },
-                child: const Text(
-                  'قراءة الكل',
-                  style: TextStyle(color: Colors.white),
-                ),
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: Text(strings.notifications),
+        backgroundColor: AppColors.primaryDark,
+        foregroundColor: Colors.white,
+        actions: [
+          if (user != null)
+            TextButton(
+              onPressed: () async {
+                try {
+                  await ref
+                      .read(notificationRepositoryProvider)
+                      .markAllAsRead(user.uid);
+                } catch (_) {
+                  if (context.mounted) _showError(context, strings);
+                }
+              },
+              child: Text(
+                strings.markAllAsRead,
+                style: const TextStyle(color: Colors.white),
               ),
-          ],
-        ),
-        body: notifications == null
-            ? const Center(child: Text('سجّل الدخول لعرض الإشعارات'))
-            : notifications.when(
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (_, __) => const Center(
-                  child: Text('تعذر تحميل الإشعارات. حاول مرة أخرى.'),
-                ),
-                data: (items) => items.isEmpty
-                    ? const Center(child: Text('لا توجد إشعارات'))
-                    : ListView.builder(
-                        padding: const EdgeInsets.all(12),
-                        itemCount: items.length,
-                        itemBuilder: (context, index) => _NotificationCard(
-                          notification: items[index],
-                          onTap: () => _openNotification(
-                            context,
-                            ref,
-                            user!.uid,
-                            items[index],
-                          ),
+            ),
+        ],
+      ),
+      body: notifications == null
+          ? Center(child: Text(strings.signInToViewNotifications))
+          : notifications.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (_, __) => Center(
+                child: Text(strings.couldNotLoadNotifications),
+              ),
+              data: (items) => items.isEmpty
+                  ? Center(child: Text(strings.noNotifications))
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: items.length,
+                      itemBuilder: (context, index) => _NotificationCard(
+                        notification: items[index],
+                        onTap: () => _openNotification(
+                          context,
+                          ref,
+                          user!.uid,
+                          items[index],
                         ),
                       ),
-              ),
-      ),
+                    ),
+            ),
     );
   }
 
@@ -85,7 +82,9 @@ class NotificationsScreen extends ConsumerWidget {
               notification.notificationId,
             );
       } catch (_) {
-        if (context.mounted) _showError(context);
+        if (context.mounted) {
+          _showError(context, AppLocalizations.of(context));
+        }
         return;
       }
     }
@@ -102,10 +101,13 @@ class NotificationsScreen extends ConsumerWidget {
     );
   }
 
-  static void _showError(BuildContext context, {String? message}) {
+  static void _showError(
+    BuildContext context,
+    AppLocalizations strings,
+  ) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message ?? 'تعذر تحديث الإشعار. حاول مرة أخرى.'),
+        content: Text(strings.couldNotUpdateNotification),
       ),
     );
   }
@@ -119,6 +121,7 @@ class _NotificationCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final locale = Localizations.localeOf(context).languageCode;
     final organization = notification.organizationId == null
         ? null
         : ref.watch(
@@ -126,7 +129,10 @@ class _NotificationCard extends ConsumerWidget {
           );
     final organizationName = organization?.maybeWhen(
       data: (data) {
-        final official = data?['officialNameArabic'];
+        final official = data == null
+            ? null
+            : data[
+                locale == 'en' ? 'officialNameEnglish' : 'officialNameArabic'];
         if (official is String && official.isNotEmpty) return official;
         final short = data?['shortName'];
         return short is String ? short : null;

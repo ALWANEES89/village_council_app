@@ -22,18 +22,48 @@ const {
 } = require("./omr_currency");
 const {
   notification,
+  bookingFeeSettingKey,
+  canViewCouncilDashboardMetrics,
   receiptBytesMatchContentType,
   receiptDownloadRuntime,
   requireBaisa,
   requireNonNegativeBaisa,
   scheduleGate,
 } = require("./financial")._test;
+
+test("council dashboard metrics allow financial roles without leaking full access", () => {
+  assert.equal(canViewCouncilDashboardMetrics({ roleId: "financialManager" }), true);
+  assert.equal(canViewCouncilDashboardMetrics({ roleId: "financialReviewer" }), true);
+  assert.equal(canViewCouncilDashboardMetrics({ roleId: "owner" }), true);
+  assert.equal(canViewCouncilDashboardMetrics({ roleId: "member" }), false);
+  assert.equal(canViewCouncilDashboardMetrics({
+    roleId: "member", permissionsSnapshot: ["fullAccess"],
+  }), false);
+  assert.equal(canViewCouncilDashboardMetrics({
+    roleId: "member", permissionsSnapshot: ["reports.view"],
+  }), true);
+});
+
+test("booking fee selection uses explicit category and regular fallback", () => {
+  assert.equal(bookingFeeSettingKey("regular", "member"), "memberBookingFeeBaisa");
+  assert.equal(bookingFeeSettingKey("regular", "guest"), "nonMemberBookingFeeBaisa");
+  assert.equal(bookingFeeSettingKey("event", "member"), "eventBookingFeeBaisa");
+  assert.equal(bookingFeeSettingKey("event", "guest"), "eventBookingFeeBaisa");
+  assert.equal(bookingFeeSettingKey(undefined, "member"), "memberBookingFeeBaisa");
+  assert.equal(bookingFeeSettingKey(undefined, "guest"), "nonMemberBookingFeeBaisa");
+});
 const {
   bookingSlotIdentity,
+  canWaiveBookingFee,
   isPrimaryCouncilOwner,
   serverNotification,
+  shouldEnforceCallableAppCheck,
 } = require("./production_security")._test;
 const { isTrustedNotification } = require("./notifications")._test;
+const {
+  effectiveMembershipPermissions,
+  hasAnyMembershipPermission,
+} = require("./permission_policy");
 const {
   parseOptions: parseInventoryOptions,
   validateOptions: validateInventoryOptions,
@@ -42,6 +72,27 @@ const {
 test("Arabic normalization ignores hamza, diacritics and tatweel", () => {
   assert.equal(normalizeArabic("إِبْــرَاهِيم"), normalizeArabic("ابراهيم"));
   assert.equal(normalizeArabic("أحمد علي"), "احمد علي");
+});
+
+test("polluted member fullAccess is ignored while granular permissions remain effective", () => {
+  const member = {
+    roleId: "member",
+    permissionsSnapshot: ["profile.read", "fullAccess", "bookings.manage"],
+  };
+  assert.deepEqual(effectiveMembershipPermissions(member), ["profile.read", "bookings.manage"]);
+  assert.equal(hasAnyMembershipPermission(member, ["fullAccess"]), false);
+  assert.equal(hasAnyMembershipPermission(member, ["bookings.manage"]), true);
+  assert.equal(hasAnyMembershipPermission({
+    roleId: "owner", permissionsSnapshot: ["fullAccess"],
+  }, ["fullAccess"]), true);
+});
+
+test("booking fee waivers require a financial role or permission", () => {
+  assert.equal(canWaiveBookingFee({ roleId: "financialManager" }), true);
+  assert.equal(canWaiveBookingFee({ roleId: "chairman" }), true);
+  assert.equal(canWaiveBookingFee({ roleId: "adminManager", permissionsSnapshot: ["bookings.manage"] }), false);
+  assert.equal(canWaiveBookingFee({ roleId: "member", permissionsSnapshot: ["fullAccess"] }), false);
+  assert.equal(canWaiveBookingFee({ roleId: "member", permissionsSnapshot: ["payments.manage"] }), true);
 });
 
 test("search prefixes include every compound-name part after three letters", () => {
@@ -177,13 +228,15 @@ test("schedule kill switches default to disabled and dry-run before writes", () 
   assert.equal(enabled.runId, "run-3");
 });
 
-test("every sensitive financial and booking callable enforces App Check", () => {
+test("sensitive callables enforce App Check except inside the explicit Functions Emulator", () => {
   const financialSource = fs.readFileSync(require.resolve("./financial"), "utf8");
   const securitySource = fs.readFileSync(require.resolve("./production_security"), "utf8");
-  for (const source of [financialSource, securitySource]) {
-    assert.match(source, /sensitiveCallableOptions\s*=\s*\{[^}]*enforceAppCheck:\s*true/s);
-  }
-  assert.equal((financialSource.match(/onCall\(\s*sensitiveCallableOptions/g) || []).length, 16);
+  assert.equal(shouldEnforceCallableAppCheck({}), true);
+  assert.equal(shouldEnforceCallableAppCheck({ FUNCTIONS_EMULATOR: "false" }), true);
+  assert.equal(shouldEnforceCallableAppCheck({ FUNCTIONS_EMULATOR: "true" }), false);
+  assert.match(financialSource, /enforceAppCheck:\s*shouldEnforceCallableAppCheck\(\)/);
+  assert.match(securitySource, /enforceAppCheck:\s*shouldEnforceCallableAppCheck\(\)/);
+  assert.equal((financialSource.match(/onCall\(\s*sensitiveCallableOptions/g) || []).length, 17);
   assert.equal((securitySource.match(/onCall\(\s*sensitiveCallableOptions/g) || []).length, 5);
 });
 

@@ -5,7 +5,14 @@ class AppColors {
   static const primaryDark = Color(0xFFBF360C);
   static const secondary = Color(0xFFFFB300);
   static const background = Color(0xFFFFF8F1);
+  static const surface = Colors.white;
+  static const surfaceMuted = Color(0xFFF5F7FA);
   static const textDark = Color(0xFF2D241E);
+  static const textSecondary = Color(0xFF667085);
+  static const success = Color(0xFF0A8F63);
+  static const warning = Color(0xFFE06B17);
+  static const error = Color(0xFFC62828);
+  static const border = Color(0xFFE6EAF0);
 
   static const primaryGradient = LinearGradient(
     colors: [Color(0xFFD84315), Color(0xFFFF8A65)],
@@ -18,6 +25,19 @@ class AppColors {
     blurRadius: 20,
     offset: const Offset(0, 8),
   );
+}
+
+class AppSpacing {
+  static const xs = 6.0;
+  static const sm = 10.0;
+  static const md = 16.0;
+  static const lg = 24.0;
+  static const xl = 32.0;
+}
+
+class AppRadius {
+  static const card = 22.0;
+  static const tile = 16.0;
 }
 
 class AppTheme {

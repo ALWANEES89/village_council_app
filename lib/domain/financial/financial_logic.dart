@@ -15,6 +15,115 @@ enum FinancialDashboardState {
   error,
 }
 
+/// حالات التصفية في دليل الحسابات المالية للإدارة.
+///
+/// تبقى [regular] حالة مجمعة للعضو الذي لا يملك التزامًا مفتوحًا، بينما تمثل
+/// بقية القيم حالات الرسوم الفعلية المخزنة. قد يظهر العضو في أكثر من تصفية
+/// تفصيلية عندما يملك عدة رسوم بحالات مختلفة.
+enum FinancialMemberFilter {
+  all,
+  regular,
+  unpaid,
+  partial,
+  overdue,
+  pendingReview,
+  paid,
+  exempt,
+  rejected,
+  cancelled,
+  refundRequired,
+}
+
+bool memberMatchesFinancialFilter({
+  required FinancialMemberFilter filter,
+  required Iterable<FinancialCharge> charges,
+}) {
+  final items = charges.toList(growable: false);
+  return switch (filter) {
+    FinancialMemberFilter.all => true,
+    FinancialMemberFilter.regular => items.every(_isSettledFinancialCharge),
+    FinancialMemberFilter.unpaid =>
+      items.any((item) => item.status == ChargeStatus.unpaid),
+    FinancialMemberFilter.partial =>
+      items.any((item) => item.status == ChargeStatus.partial),
+    FinancialMemberFilter.overdue =>
+      items.any((item) => item.status == ChargeStatus.overdue),
+    FinancialMemberFilter.pendingReview => items.any((item) =>
+        item.status == ChargeStatus.pendingReview || item.hasPendingReceipt),
+    FinancialMemberFilter.paid =>
+      items.any((item) => item.status == ChargeStatus.paid),
+    FinancialMemberFilter.exempt =>
+      items.any((item) => item.status == ChargeStatus.waived),
+    FinancialMemberFilter.rejected =>
+      items.any((item) => item.status == ChargeStatus.rejected),
+    FinancialMemberFilter.cancelled =>
+      items.any((item) => item.status == ChargeStatus.cancelled),
+    FinancialMemberFilter.refundRequired =>
+      items.any((item) => item.status == ChargeStatus.refundRequired),
+  };
+}
+
+bool _isSettledFinancialCharge(FinancialCharge charge) {
+  if (charge.hasPendingReceipt) return false;
+  return switch (charge.status) {
+    ChargeStatus.paid || ChargeStatus.waived || ChargeStatus.cancelled => true,
+    ChargeStatus.unpaid ||
+    ChargeStatus.partial ||
+    ChargeStatus.pendingReview ||
+    ChargeStatus.overdue ||
+    ChargeStatus.rejected ||
+    ChargeStatus.refundRequired =>
+      false,
+  };
+}
+
+class FinancialChargeSummary {
+  const FinancialChargeSummary({
+    required this.dueInvoiceCount,
+    required this.paidInvoiceCount,
+    required this.totalPaidBaisa,
+    required this.totalBalanceBaisa,
+  });
+
+  final int dueInvoiceCount;
+  final int paidInvoiceCount;
+  final int totalPaidBaisa;
+  final int totalBalanceBaisa;
+}
+
+FinancialChargeSummary summarizeFinancialCharges(
+  Iterable<FinancialCharge> charges,
+) {
+  var dueInvoiceCount = 0;
+  var paidInvoiceCount = 0;
+  var totalPaidBaisa = 0;
+  var totalBalanceBaisa = 0;
+  const nonPayableStatuses = {
+    ChargeStatus.waived,
+    ChargeStatus.cancelled,
+    ChargeStatus.refundRequired,
+  };
+
+  for (final charge in charges) {
+    totalPaidBaisa += charge.amountPaidBaisa;
+    if (charge.status == ChargeStatus.paid) {
+      paidInvoiceCount += 1;
+    }
+    if (charge.balanceBaisa > 0 &&
+        !nonPayableStatuses.contains(charge.status)) {
+      dueInvoiceCount += 1;
+      totalBalanceBaisa += charge.balanceBaisa;
+    }
+  }
+
+  return FinancialChargeSummary(
+    dueInvoiceCount: dueInvoiceCount,
+    paidInvoiceCount: paidInvoiceCount,
+    totalPaidBaisa: totalPaidBaisa,
+    totalBalanceBaisa: totalBalanceBaisa,
+  );
+}
+
 class ReceiptDraftValidation {
   const ReceiptDraftValidation(
       {required this.allocationTotalBaisa, required this.errors});

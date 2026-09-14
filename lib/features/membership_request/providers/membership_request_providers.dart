@@ -23,13 +23,19 @@ final pendingMembershipRequestsProvider =
 class MembershipRequestSubmissionState {
   final bool isSubmitting;
   final bool isSubmitted;
-  final String? error;
+  final MembershipRequestSubmissionFailure? failure;
 
   const MembershipRequestSubmissionState({
     this.isSubmitting = false,
     this.isSubmitted = false,
-    this.error,
+    this.failure,
   });
+}
+
+enum MembershipRequestSubmissionFailure {
+  duplicatePending,
+  activeMembership,
+  unavailable,
 }
 
 class MembershipRequestSubmissionNotifier
@@ -37,7 +43,7 @@ class MembershipRequestSubmissionNotifier
   MembershipRequestSubmissionNotifier(this._repository)
       : super(const MembershipRequestSubmissionState());
 
-  final MembershipRequestRepository _repository;
+  final MembershipRequestSubmissionRepository _repository;
 
   Future<bool> submit(MembershipRequestModel request) async {
     state = const MembershipRequestSubmissionState(isSubmitting: true);
@@ -47,18 +53,18 @@ class MembershipRequestSubmissionNotifier
       return true;
     } on DuplicatePendingMembershipRequestException {
       state = const MembershipRequestSubmissionState(
-        error: 'لديك طلب انضمام قيد المراجعة لهذا المجلس',
+        failure: MembershipRequestSubmissionFailure.duplicatePending,
       );
       return false;
     } on StateError {
       state = const MembershipRequestSubmissionState(
-        error: 'لديك عضوية نشطة في هذا المجلس',
+        failure: MembershipRequestSubmissionFailure.activeMembership,
       );
       return false;
     } catch (error, stackTrace) {
       debugPrint('[JoinRequest] submit failed: $error\n$stackTrace');
       state = const MembershipRequestSubmissionState(
-        error: 'تعذر إرسال طلب الانضمام. حاول مرة أخرى.',
+        failure: MembershipRequestSubmissionFailure.unavailable,
       );
       return false;
     }

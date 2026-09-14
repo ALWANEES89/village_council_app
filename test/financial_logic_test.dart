@@ -30,6 +30,7 @@ void main() {
     int balance = 1000,
     ChargeStatus status = ChargeStatus.unpaid,
     ChargeType type = ChargeType.subscription,
+    bool hasPendingReceipt = false,
   }) =>
       FinancialCharge(
         id: id,
@@ -42,6 +43,7 @@ void main() {
         amountPaidBaisa: paid,
         balanceBaisa: balance,
         status: status,
+        hasPendingReceipt: hasPendingReceipt,
       );
 
   group('OMR money', () {
@@ -243,10 +245,62 @@ void main() {
               allocationTotalBaisa: 1000,
               differenceBaisa: 0),
           isFalse);
+      expect(
+          canApproveReceipt(
+              reviewStatus: 'pending',
+              amountDeclaredBaisa: 0,
+              allocationTotalBaisa: 0,
+              differenceBaisa: 0),
+          isFalse);
+    });
+    test('legacy English billing labels are localized for display', () {
+      final parsed = FinancialCharge.fromMap({
+        'chargeId': 'legacy',
+        'titleArabic': 'اشتراك one-time',
+        'amountDue': 2.5,
+      });
+      final allocation = ReceiptAllocation.fromMap({
+        'chargeTitle': 'Membership annual',
+        'amountAllocatedBaisa': 1000,
+        'balanceBeforeBaisa': 1000,
+      });
+      expect(parsed.titleArabic, 'اشتراك مرة واحدة');
+      expect(allocation.chargeTitle, 'Membership سنوي');
     });
   });
 
   group('dashboard states', () {
+    test('summary uses modern integer-baisa charges including partial payments',
+        () {
+      final summary = summarizeFinancialCharges([
+        charge(
+          id: 'partial',
+          due: 13750,
+          paid: 5000,
+          balance: 8750,
+          status: ChargeStatus.partial,
+        ),
+        charge(
+          id: 'paid',
+          due: 3000,
+          paid: 3000,
+          balance: 0,
+          status: ChargeStatus.paid,
+        ),
+        charge(
+          id: 'cancelled',
+          due: 2000,
+          balance: 2000,
+          status: ChargeStatus.cancelled,
+        ),
+      ]);
+
+      expect(summary.dueInvoiceCount, 1);
+      expect(summary.paidInvoiceCount, 1);
+      expect(summary.totalPaidBaisa, 8000);
+      expect(summary.totalBalanceBaisa, 8750);
+    });
+
     test('covers loading, error, empty and free', () {
       expect(
           deriveDashboardState(
@@ -311,6 +365,94 @@ void main() {
           userId: 'u1',
           feeOverrideType: FeeOverrideType.exempt);
       expect(state(charge(), account: exempt), FinancialDashboardState.exempt);
+    });
+  });
+
+  group('financial member filters', () {
+    bool matches(FinancialMemberFilter filter, List<FinancialCharge> charges) =>
+        memberMatchesFinancialFilter(filter: filter, charges: charges);
+
+    test('all and regular include members without open obligations', () {
+      expect(matches(FinancialMemberFilter.all, const []), isTrue);
+      expect(matches(FinancialMemberFilter.regular, const []), isTrue);
+      expect(
+        matches(FinancialMemberFilter.regular, [
+          charge(
+            balance: 0,
+            paid: 1000,
+            status: ChargeStatus.paid,
+          ),
+          charge(
+            id: 'waived',
+            balance: 1000,
+            status: ChargeStatus.waived,
+          ),
+          charge(
+            id: 'cancelled',
+            status: ChargeStatus.cancelled,
+          ),
+        ]),
+        isTrue,
+      );
+    });
+
+    test('regular excludes every open or actionable state', () {
+      const openStatuses = [
+        ChargeStatus.unpaid,
+        ChargeStatus.partial,
+        ChargeStatus.pendingReview,
+        ChargeStatus.overdue,
+        ChargeStatus.rejected,
+        ChargeStatus.refundRequired,
+      ];
+      for (final status in openStatuses) {
+        expect(
+          matches(FinancialMemberFilter.regular, [charge(status: status)]),
+          isFalse,
+          reason: status.name,
+        );
+      }
+      expect(
+        matches(FinancialMemberFilter.regular, [
+          charge(
+            balance: 0,
+            paid: 1000,
+            status: ChargeStatus.paid,
+            hasPendingReceipt: true,
+          ),
+        ]),
+        isFalse,
+      );
+    });
+
+    test('every detailed option maps to its stored charge state', () {
+      const cases = <FinancialMemberFilter, ChargeStatus>{
+        FinancialMemberFilter.unpaid: ChargeStatus.unpaid,
+        FinancialMemberFilter.partial: ChargeStatus.partial,
+        FinancialMemberFilter.overdue: ChargeStatus.overdue,
+        FinancialMemberFilter.pendingReview: ChargeStatus.pendingReview,
+        FinancialMemberFilter.paid: ChargeStatus.paid,
+        FinancialMemberFilter.exempt: ChargeStatus.waived,
+        FinancialMemberFilter.rejected: ChargeStatus.rejected,
+        FinancialMemberFilter.cancelled: ChargeStatus.cancelled,
+        FinancialMemberFilter.refundRequired: ChargeStatus.refundRequired,
+      };
+      for (final entry in cases.entries) {
+        expect(
+          matches(entry.key, [charge(status: entry.value)]),
+          isTrue,
+          reason: entry.key.name,
+        );
+      }
+    });
+
+    test('pending receipt flag is included in pending review', () {
+      expect(
+        matches(FinancialMemberFilter.pendingReview, [
+          charge(hasPendingReceipt: true),
+        ]),
+        isTrue,
+      );
     });
   });
 }

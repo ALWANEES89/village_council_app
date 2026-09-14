@@ -209,6 +209,36 @@ class OrganizationRepository {
     };
   }
 
+  Future<Map<String, int>> getCouncilDashboardMetrics(
+    String organizationId,
+  ) async {
+    try {
+      final result = await _functions
+          .httpsCallable('getCouncilDashboardMetrics')
+          .call({'organizationId': organizationId});
+      final data = Map<String, dynamic>.from(result.data as Map);
+      int readCount(String key) {
+        final value = data[key];
+        if (value is int && value >= 0) return value;
+        if (value is num && value >= 0 && value == value.roundToDouble()) {
+          return value.toInt();
+        }
+        throw const FormatException('Invalid dashboard metric.');
+      }
+
+      return {
+        'members': readCount('memberCount'),
+        'upcomingBookings': readCount('upcomingBookingCount'),
+      };
+    } on FirebaseFunctionsException catch (error) {
+      debugPrint(
+        '[CouncilDashboard] metrics FAILED code=${error.code} '
+        'org=$organizationId',
+      );
+      rethrow;
+    }
+  }
+
   /// Creates any missing documents required by an organization without
   /// changing or deleting documents that already exist.
   Future<OrganizationRepairResult> repairOrganizationStructure(
