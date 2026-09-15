@@ -20,6 +20,12 @@ Core QA Passed
 - Language
 - Navigation
 
+## 2026-09-15 FOLLOW-UP
+
+- Emulator QA follow-up: PASS.
+- Login, multi-council switching, free/paid councils, pending receipt protection, transaction details, and PDF receipt viewing were verified.
+- Real Device QA: Pending بسبب الكابل. Production: Not touched. Deploy: Not done.
+
 ## NEXT PHASE
 
 Real Device QA

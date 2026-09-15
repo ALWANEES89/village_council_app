@@ -48,4 +48,9 @@ PASS:
 
 **REAL DEVICE QA**
 
+## 2026-09-15 follow-up
+
+- Emulator QA follow-up 2026-09-15: **PASS**.
+- Real Device QA: **Pending** بسبب الكابل.
+
 The detailed QA history remains in the dated reports under `project-brain/`; this checkpoint does not replace or delete it.

@@ -52,34 +52,32 @@ class VillageCouncilApp extends ConsumerWidget {
       ],
       routerConfig: router,
       builder: (context, child) {
+        const showLocalEnvironmentBanner =
+            kDebugMode && FirebaseEmulatorConfig.enabled;
         return Directionality(
           textDirection: locale.languageCode == 'ar'
               ? ui.TextDirection.rtl
               : ui.TextDirection.ltr,
-          child: Stack(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              NotificationTapListener(child: child!),
-              if (kDebugMode && FirebaseEmulatorConfig.enabled)
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  child: Material(
-                    color: Colors.deepOrange,
-                    child: SafeArea(
-                      bottom: false,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 3),
-                        child: Text(
-                          AppLocalizations.of(context).localTestEnvironment,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 12),
-                        ),
+              if (showLocalEnvironmentBanner)
+                Material(
+                  color: Colors.deepOrange,
+                  child: SafeArea(
+                    bottom: false,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 3),
+                      child: Text(
+                        AppLocalizations.of(context).localTestEnvironment,
+                        textAlign: TextAlign.center,
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 12),
                       ),
                     ),
                   ),
                 ),
+              Expanded(child: NotificationTapListener(child: child!)),
             ],
           ),
         );

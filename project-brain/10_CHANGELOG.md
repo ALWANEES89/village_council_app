@@ -215,6 +215,12 @@
 - حالة التحقق: flutter analyze ناجح، flutter test ناجح (22)، واختبارات Node ناجحة (3)، وترجمة قواعد Firestore بالمحاكي ناجحة.
 - المتبقي: اختبارات تكامل كاملة للدوال والقواعد، QA على الأجهزة، مراجعة dry-run ببيانات منسوخة قبل النشر.
 
+## 2026-09-15 — Emulator QA follow-up
+
+- Emulator QA follow-up 2026-09-15: **PASS**.
+- Pending receipt charges no longer reappear as payable; transaction navigation and receipt PDF viewing were verified.
+- Real Device QA: **Pending** بسبب الكابل. Production was not touched and no deploy was run.
+
 ## 2026-07-11
 - تم إنشاء قاعدة المعرفة Project Brain.
 - تم إنشاء نظام متابعة المهام ونسبة الإنجاز.

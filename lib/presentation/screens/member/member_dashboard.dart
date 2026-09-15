@@ -116,7 +116,17 @@ class _MemberDashboardState extends ConsumerState<MemberDashboard> {
     final pending = transactions
         .where((item) => item.reviewStatus == 'pending')
         .fold<int>(0, (sum, item) => sum + item.amountDeclaredBaisa);
-    final payable = charges.where((item) => item.isPayable).toList();
+    final pendingTransactionsByCharge = <String, String>{};
+    for (final transaction
+        in transactions.where((item) => item.reviewStatus == 'pending')) {
+      for (final allocation in transaction.allocations) {
+        pendingTransactionsByCharge[allocation.chargeId] = transaction.id;
+      }
+    }
+    final payable = charges
+        .where((item) =>
+            item.isPayable && !pendingTransactionsByCharge.containsKey(item.id))
+        .toList();
     final nextDue = payable
         .map((item) => item.dueDate)
         .whereType<DateTime>()
@@ -137,7 +147,12 @@ class _MemberDashboardState extends ConsumerState<MemberDashboard> {
     ));
     final filtered = _filter == null
         ? charges
-        : charges.where((item) => item.status == _filter).toList();
+        : charges.where((item) {
+            final status = pendingTransactionsByCharge.containsKey(item.id)
+                ? ChargeStatus.pendingReview
+                : item.status;
+            return status == _filter;
+          }).toList();
     final paidForOthers =
         transactions.where((item) => item.paysForOthers).toList();
 
@@ -157,7 +172,8 @@ class _MemberDashboardState extends ConsumerState<MemberDashboard> {
             memberNumber: memberNumber,
             planName: account?.planNameArabic ??
                 (account?.planId == null ? 'لم تُعيّن باقة' : account!.planId!),
-            subscriptionStatus: account?.subscriptionStatus ?? 'غير مفعّل',
+            subscriptionStatus:
+                _subscriptionStatusLabel(account?.subscriptionStatus),
             accountState: accountState,
           ),
           const SizedBox(height: 14),
@@ -185,7 +201,9 @@ class _MemberDashboardState extends ConsumerState<MemberDashboard> {
                   icon: Icons.hourglass_top,
                   color: Colors.orange),
               _SummaryCard(
-                label: 'الاستحقاق القادم',
+                label: nextDue != null && nextDue.isBefore(DateTime.now())
+                    ? 'استحقاق متأخر'
+                    : 'الاستحقاق القادم',
                 value: nextDue == null
                     ? 'لا يوجد'
                     : DateFormat('yyyy/MM/dd').format(nextDue),
@@ -275,8 +293,17 @@ class _MemberDashboardState extends ConsumerState<MemberDashboard> {
             for (final charge in filtered)
               _ChargeCard(
                 charge: charge,
+                pendingTransactionId: pendingTransactionsByCharge[charge.id],
                 onOpen: () {
-                  if (charge.isPayable) {
+                  final pendingTransactionId =
+                      pendingTransactionsByCharge[charge.id];
+                  if (pendingTransactionId != null) {
+                    context.pushNamed(
+                      'transactionTimeline',
+                      pathParameters: {'id': pendingTransactionId},
+                      queryParameters: {'organizationId': organizationId},
+                    );
+                  } else if (charge.isPayable) {
                     context.pushNamed(
                       'uploadReceipt',
                       extra: ReceiptUploadArguments(
@@ -351,6 +378,22 @@ String _chargeStatusLabel(ChargeStatus status) => switch (status) {
       ChargeStatus.rejected => 'مرفوض',
       ChargeStatus.cancelled => 'ملغى',
       ChargeStatus.refundRequired => 'يتطلب استردادًا',
+    };
+
+String _subscriptionStatusLabel(String? status) => switch (status) {
+      'active' => 'نشط',
+      'paused' => 'متوقف مؤقتًا',
+      'cancelled' => 'ملغى',
+      'expired' => 'منتهي',
+      null || '' => 'غير مفعّل',
+      _ => status,
+    };
+
+String _chargeTypeLabel(ChargeType type) => switch (type) {
+      ChargeType.subscription => 'اشتراك',
+      ChargeType.booking => 'حجز',
+      ChargeType.event => 'مناسبة',
+      ChargeType.other => 'أخرى',
     };
 
 class _AccountHeader extends StatelessWidget {
@@ -460,9 +503,14 @@ class _FilterChip extends StatelessWidget {
 }
 
 class _ChargeCard extends StatelessWidget {
-  const _ChargeCard({required this.charge, required this.onOpen});
+  const _ChargeCard({
+    required this.charge,
+    required this.onOpen,
+    this.pendingTransactionId,
+  });
   final FinancialCharge charge;
   final VoidCallback onOpen;
+  final String? pendingTransactionId;
   @override
   Widget build(BuildContext context) => Card(
         child: InkWell(
@@ -475,10 +523,13 @@ class _ChargeCard extends StatelessWidget {
                 Expanded(
                     child: Text(charge.titleArabic,
                         style: const TextStyle(fontWeight: FontWeight.bold))),
-                Chip(label: Text(_chargeStatusLabel(charge.status))),
+                Chip(
+                    label: Text(_chargeStatusLabel(pendingTransactionId == null
+                        ? charge.status
+                        : ChargeStatus.pendingReview))),
               ]),
               Text(
-                  '${charge.chargeType.name} • ${charge.periodKey ?? 'بدون فترة'}'),
+                  '${_chargeTypeLabel(charge.chargeType)} • ${charge.periodKey ?? 'بدون فترة'}'),
               const SizedBox(height: 8),
               OmrAmountPairLine(
                 firstLabel: 'المبلغ:',
@@ -499,7 +550,14 @@ class _ChargeCard extends StatelessWidget {
                       style: const TextStyle(
                           color: Colors.green, fontWeight: FontWeight.bold)),
                 ),
-              if (charge.isPayable)
+              if (pendingTransactionId != null)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text('الإيصال قيد المراجعة — اضغط لعرض التفاصيل',
+                      style: TextStyle(
+                          color: Colors.orange, fontWeight: FontWeight.bold)),
+                )
+              else if (charge.isPayable)
                 const Padding(
                   padding: EdgeInsets.only(top: 8),
                   child: Text('اضغط لاختيار الرسم ورفع إيصال',

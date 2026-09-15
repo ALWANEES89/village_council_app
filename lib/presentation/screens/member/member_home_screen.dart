@@ -70,6 +70,13 @@ class _MemberHomeScreenState extends ConsumerState<MemberHomeScreen> {
     }
   }
 
+  Future<void> _openReceipts(MembershipModel? membership) async {
+    if (membership == null) return _showNoMembership();
+    if (await _selectMembership(membership) && mounted) {
+      context.pushNamed('receiptHistory');
+    }
+  }
+
   Future<void> _openCouncilDashboard(MembershipModel membership) async {
     if (await _selectMembership(membership) && mounted) {
       context.pushNamed('councilDashboard');
@@ -298,7 +305,7 @@ class _MemberHomeScreenState extends ConsumerState<MemberHomeScreen> {
                 _ServicesGrid(
                   onBookings: () => _openBooking(selected),
                   onPayments: () => _openPayments(selected),
-                  onReceipts: () => context.pushNamed('receiptHistory'),
+                  onReceipts: () => _openReceipts(selected),
                   onNotifications: () => context.pushNamed('notifications'),
                   onUpload: () => _uploadReceipt(selected),
                 ),
